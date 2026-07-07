@@ -41,9 +41,7 @@ export interface AiToolOptions {
 export type AiToolMeta = AiToolOptions;
 
 /** Structural shape of an `@AiTool` class: a constructor whose instance implements `execute`. */
-export type ToolClass = abstract new (
-  ...args: never[]
-) => ToolHandler;
+export type ToolClass = abstract new (...args: never[]) => ToolHandler;
 
 /**
  * Marks a class as an AI tool. The class must implement `execute(input, ctx)`. The provider's

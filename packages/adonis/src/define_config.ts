@@ -5,7 +5,12 @@ import type { QuotaStore } from './spi/quota-store.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { TokenStreamSink } from './spi/token-stream-sink.js';
 import { stores } from './stores/factory.js';
-import type { LucidStoreConfig, MemoryStoreConfig, StoreContext, StoreFactory } from './stores/factory.js';
+import type {
+  LucidStoreConfig,
+  MemoryStoreConfig,
+  StoreContext,
+  StoreFactory,
+} from './stores/factory.js';
 import type { AgentDefinition } from './types.js';
 
 /** A lazy factory thunk, so the peer (`ai`/a provider SDK) is imported only when the config loads. */

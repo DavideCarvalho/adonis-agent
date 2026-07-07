@@ -26,7 +26,12 @@ class GetWeatherTool implements ToolHandler<{ city: string }> {
 }
 
 const purgeCache = defineTool(
-  { name: 'purgeCache', kind: 'action', description: 'Purge a cache key', input: z.object({ key: z.string() }) },
+  {
+    name: 'purgeCache',
+    kind: 'action',
+    description: 'Purge a cache key',
+    input: z.object({ key: z.string() }),
+  },
   async ({ key }: { key: string }) => ({ purged: key }),
 );
 

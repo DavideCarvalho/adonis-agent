@@ -121,7 +121,11 @@ describe('LucidAgentStore', () => {
   it('truncates messages from a point, deleting their tool calls too', async () => {
     const thread = await store.createThread({ actor, persona: 'default' });
     const m1 = await store.appendMessage({ threadId: thread.id, role: 'user', content: 'keep' });
-    const m2 = await store.appendMessage({ threadId: thread.id, role: 'assistant', content: 'drop' });
+    const m2 = await store.appendMessage({
+      threadId: thread.id,
+      role: 'assistant',
+      content: 'drop',
+    });
     await store.recordToolCall({
       toolCallId: 'tc-1',
       messageId: m2.id,

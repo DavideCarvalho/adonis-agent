@@ -108,7 +108,13 @@ describe('InlineAgentRunner + AgentService over the Lucid store', () => {
         : { text: 'done' };
     const g = buildGraph(script);
     g.registry.register(
-      { name: 'danger', kind: 'action', description: 'dangerous', inputSchema: z.object({ k: z.string() }), roles: ['ADMIN'] },
+      {
+        name: 'danger',
+        kind: 'action',
+        description: 'dangerous',
+        inputSchema: z.object({ k: z.string() }),
+        roles: ['ADMIN'],
+      },
       { execute: async () => ({ acted: true }) },
     );
 
@@ -138,7 +144,13 @@ describe('InlineAgentRunner + AgentService over the Lucid store', () => {
         : { text: 'done' };
     const g = buildGraph(script);
     g.registry.register(
-      { name: 'danger', kind: 'action', description: 'dangerous', inputSchema: z.object({ k: z.string() }), roles: ['ADMIN'] },
+      {
+        name: 'danger',
+        kind: 'action',
+        description: 'dangerous',
+        inputSchema: z.object({ k: z.string() }),
+        roles: ['ADMIN'],
+      },
       {
         execute: async () => {
           ran = true;
@@ -190,8 +202,7 @@ describe('actor resolvers', () => {
     const resolver = new HeaderActorResolver();
     const ctx = {
       request: {
-        header: (n: string) =>
-          ({ 'x-actor-id': 'u9', 'x-actor-role': 'ADMIN, EDITOR' })[n],
+        header: (n: string) => ({ 'x-actor-id': 'u9', 'x-actor-role': 'ADMIN, EDITOR' })[n],
       },
     };
     expect(resolver.resolve(ctx)).toEqual({ id: 'u9', roles: ['ADMIN', 'EDITOR'] });

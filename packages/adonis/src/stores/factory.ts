@@ -63,11 +63,13 @@ export const stores = {
     return async () => {
       const db = (await import('@adonisjs/lucid/services/db')).default;
       const { LucidAgentStore } = await import('./lucid.js');
-      const client = (
-        config.connection !== undefined ? db.connection(config.connection) : db
-      ) as unknown as LucidDatabaseLike;
+      const client = (config.connection !== undefined
+        ? db.connection(config.connection)
+        : db) as unknown as LucidDatabaseLike;
       return new LucidAgentStore(client, {
-        ...(config.autoCreateTables !== undefined ? { autoCreateTables: config.autoCreateTables } : {}),
+        ...(config.autoCreateTables !== undefined
+          ? { autoCreateTables: config.autoCreateTables }
+          : {}),
       });
     };
   },
