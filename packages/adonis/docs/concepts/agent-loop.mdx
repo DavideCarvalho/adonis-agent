@@ -1,0 +1,89 @@
+---
+title: The agent loop
+description: The provider-agnostic agent turn — the model→tools→approval→model state machine, the hooks seam that makes it replay-safe, and the inline vs durable runners that drive it.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Steps, Step } from 'fumadocs-ui/components/steps';
+
+At the center of the library is `runAgentLoop` — one provider-agnostic function that drives a single agent turn. It is the same body whether the turn runs in-process or (in the future) as a durable workflow. Understanding it is the fastest way to understand everything else.
+
+## The turn, step by step
+
+A turn is an iteration, capped at `maxSteps` (default 8). Each pass asks the model for a reply; if the model requests no tools, the turn is done; otherwise the loop runs each requested tool and feeds the results back to the model for another pass.
+
+<Steps>
+<Step>
+
+**Quota check (pre-model).** If a quota store is configured, the loop checks the actor's daily budget *before* the first model call. Over budget → the turn throws `QuotaExceededError` and no tokens are spent. See [Quota & cost](/docs/agent/governance/quota-and-cost).
+
+</Step>
+<Step>
+
+**Persist the user message, load history.** The user's text is appended to the thread, then the full message history is loaded and mapped into neutral model messages.
+
+</Step>
+<Step>
+
+**Model turn.** The effective system prompt is resolved (agent base prompt, then persona prompt wrapping it), the offered tools are computed for this actor and persona, and `model.runTurn({ system, messages, tools, sink })` streams text deltas to the live sink and returns the assembled text plus any requested tool calls and usage.
+
+</Step>
+<Step>
+
+**Account for usage.** The turn's token usage (and the provider's real cost when a gateway reports it) is recorded to the ledger, and the daily quota is bumped.
+
+</Step>
+<Step>
+
+**Run the tools.** For each requested call the loop branches on the tool's `kind`:
+
+- **`read`** — recorded as `auto_executed`, then invoked immediately.
+- **`action`** — recorded as `pending_approval`, then the loop *awaits a human decision*. On approve it runs; on reject it records the rejection and feeds a rejection result back to the model.
+- **`agent`** — delegation. The loop runs another named agent (never a handler) and feeds its answer back. See [Personas & agents](/docs/agent/authoring/personas-and-agents).
+
+Every tool invocation re-checks the actor's role and re-validates the input against the tool's schema before the handler runs.
+
+</Step>
+<Step>
+
+**Loop or finish.** Tool results are appended as a synthetic message and the loop runs another model pass. When a model turn requests no tools, the loop closes the live stream, derives a thread title on the first turn, and returns the final text.
+
+</Step>
+</Steps>
+
+## The hooks seam
+
+`runAgentLoop` takes injected dependencies (`model`, `store`, `registry`, `rolesPolicy`, `quota?`, the resolved `systemPrompt`, and a pre-computed `day`) plus a small `AgentLoopHooks` object. The hooks are the entire difference between running in-process and running durably:
+
+| Hook | Inline runner | Durable runner (deferred) |
+| --- | --- | --- |
+| `step(name, fn)` | calls `fn()` directly | wraps `fn` in a durable checkpoint (`ctx.localStep`) so replay returns the cached result |
+| `awaitApproval(call, ctx)` | resolves a pending in-memory promise | awaits a durable signal (`ctx.waitForSignal`) that survives restarts |
+| `openSink()` | opens the in-process token sink | opens a shared sink keyed by run id |
+| `runAgent(name, task)` | runs a nested in-process loop | starts a durable child workflow (`ctx.child`) |
+
+<Callout type="info" title="Why every side-effect goes through step()">
+Persisting a message, calling the model, invoking a tool, bumping the quota — each is wrapped in `hooks.step(name, fn)`. Inline, that wrapper is a no-op passthrough. Under a durable runner, the *same* wrapper makes each side-effect a replay-safe checkpoint: on recovery, completed steps return their saved result instead of running again — no double writes, no re-streaming, stable ids. The loop was written once, for both worlds.
+</Callout>
+
+## Determinism & replay-readiness
+
+The loop body is deliberately deterministic so the future durable runner can recover a suspended turn by replaying it. The `day` (`YYYY-MM-DD`) is stamped *once* by the runner and passed in, rather than read inside the loop, so quota-by-day stays stable across a replay. Nothing in the body calls `Date.now()` or `Math.random()` directly on a control path — those live in `step`-wrapped side effects. This is why HITL is modeled as a hook the runner supplies: inline it's a promise, durably it's a signal, and the loop doesn't care which.
+
+<Callout type="warn" title="The suspend detail">
+There is deliberately **no** `try/finally` closing the sink around the loop. A durable runner suspends by *throwing* through the stack at `awaitApproval`; a `finally` would then close the live stream on every suspend. The stream is closed only on normal completion — so a suspended-then-resumed run keeps one continuous token stream.
+</Callout>
+
+## Inline runner (shipped)
+
+`InlineAgentRunner` is the default (`durable: false`). `start(input)` mints a run id and kicks off `runAgentLoop` in the background, returning immediately so the HTTP handler can begin piping SSE. HITL decisions are delivered by `signal(runId, toolCallId, decision)`, which resolves a pending promise keyed `${runId}:${toolCallId}` — so one run's approval can never satisfy another's. A failed run surfaces the error on the live stream and closes it, so a subscriber is never left hanging.
+
+Delegation runs a **nested** in-process loop on a transient sub-thread. A nested sub-agent has no human to prompt, so its `action` tools are auto-declined rather than left hanging.
+
+<Callout type="info">
+The inline runner is single-replica: pending approvals and the token sink live in process memory. Horizontal scaling and crash-survival are the job of the durable runner — see the [Roadmap](/docs/agent/roadmap).
+</Callout>
+
+## Diagnostics
+
+The loop publishes structural lifecycle events — run started, assistant message, tool call (executed / rejected / failed), delegation, run finished — on the `agora:agent:*` diagnostics channel. When [`@adonis-agora/diagnostics`](/docs/diagnostics) is installed they're captured (and can surface in [Telescope](/docs/telescope)); when it isn't, they cost nothing. Toggle with `emitDiagnostics` in the config.

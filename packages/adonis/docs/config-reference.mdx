@@ -1,0 +1,102 @@
+---
+title: Configuration reference
+description: Every field of AgentConfig — the shape of config/agent.ts — with its type, default, and behavior.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+`config/agent.ts` exports `defineConfig(config)` where `config` is an `AgentConfig`. Only `model` is required; every other field has a safe, fail-closed default. This page documents all of them.
+
+## Full example
+
+```ts title="config/agent.ts"
+import { defineConfig, stores, AuthActorResolver } from '@adonis-agora/agent'
+import { aiSdkModel } from '@adonis-agora/agent/ai-sdk'
+import { openai } from '@ai-sdk/openai'
+
+export default defineConfig({
+  model: () => aiSdkModel(openai('gpt-4o-mini')),
+
+  store: 'lucid',
+  stores: { memory: stores.memory(), lucid: stores.lucid() },
+
+  actorResolver: new AuthActorResolver(),
+  defaultRoles: ['ADMIN'],
+  maxSteps: 8,
+  path: 'agent',
+
+  defaultAgent: {
+    systemPrompt: 'You are a helpful assistant.',
+    defaultPersona: 'default',
+    personas: [{ id: 'default', label: 'Default', systemPrompt: 'You are a helpful assistant.' }],
+  },
+})
+```
+
+## Fields
+
+### `model` <span data-req>required</span>
+
+`ModelProvider | () => ModelProvider | Promise<ModelProvider>`. The LLM. Pass a `ModelProvider` directly, or (recommended) a **lazy thunk** so the provider SDK peer is imported only at boot. Wrap a Vercel AI SDK model with `aiSdkModel(...)`, or implement the tiny `ModelProvider` SPI yourself.
+
+### `store`
+
+`string`. The name of a key in `stores` to use. **Omit for the in-memory store** (single-process). See [State stores](/docs/agent/stores/lucid).
+
+### `stores`
+
+`Record<string, StoreFactory>`. Named store factories built with the `stores` helper — `stores.lucid(...)` and/or `stores.memory()`. Each factory is a lazy thunk, so a driver's peer (`@adonisjs/lucid`) is imported only when its store is selected.
+
+### `sink`
+
+`TokenStreamSink | () => TokenStreamSink`. The live token transport (data plane). **Defaults to the in-process sink** (`InProcessTokenStreamSink`), which buffers per run so a client can re-attach.
+
+### `quota`
+
+`QuotaStore | () => QuotaStore`. The daily token budget. **Omit to disable quotas** (fail-open on budget). When set, the budget is checked before the model runs (fail-closed). See [Quota & cost](/docs/agent/governance/quota-and-cost).
+
+### `authorizer` / `rolesPolicy`
+
+`RolesPolicy`. The tool authorization gate; `authorizer` and `rolesPolicy` are **aliases** — pass either. **Defaults to `DefaultToolAuthorizer`** (fail-closed, ADMIN-only, role-set intersection). Swap it to plug an ability-aware policy. See [Authorization](/docs/agent/governance/authorization).
+
+### `defaultRoles`
+
+`string[]`. The roles a tool requires when it declares none. **Default `['ADMIN']`** — so an ungoverned tool is admin-only by default.
+
+### `actorResolver`
+
+`ActorResolver`. Resolves the acting identity per request — the identity seam. **Defaults to a resolver that THROWS on every request**, so the agent never fabricates a caller. Wire `AuthActorResolver`, `HeaderActorResolver`, or your own.
+
+<Callout type="warn">
+Leaving `actorResolver` unset makes every actor-scoped route reply `401`. This is intentional — configure a resolver to serve traffic.
+</Callout>
+
+### `path`
+
+`string`. The route prefix the `/agent/*` routes mount under. **Default `'agent'`** (→ `/agent/chat`, `/agent/threads`, …). Leading/trailing slashes are stripped.
+
+### `durable`
+
+`boolean`. Run each turn as a durable workflow instead of in-process. **Deferred — not yet supported.** Setting `true` logs a warning and falls back to the inline runner. See the [Roadmap](/docs/agent/roadmap).
+
+### `agents`
+
+`AgentDefinition[]`. Additional named agents an orchestrator can delegate to via `delegatesTo`. See [Personas & agents](/docs/agent/authoring/personas-and-agents).
+
+### `defaultAgent`
+
+`Omit<AgentDefinition, 'name'> & { name?: string }`. The implicit single agent's config — its base `systemPrompt`, `personas`, `defaultPersona`, tool allow-list (`tools`), `delegatesTo`, `modelId`, and `maxSteps`. **Omit for a bare assistant** (`'You are a helpful assistant.'`). Its `name` defaults to `'default'`.
+
+### `tools`
+
+`BrandedFunctionalTool[]`. Static `defineTool(...)` functional tools to register at boot, in addition to `app/agent_tools` discovery. See [Tools](/docs/agent/authoring/tools).
+
+### `maxSteps`
+
+`number`. The cap on model↔tool iterations per turn. **Default `8`.** A per-agent `AgentDefinition.maxSteps` overrides it for that agent.
+
+### `emitDiagnostics`
+
+`boolean`. Emit `agora:agent:*` lifecycle events when [`@adonis-agora/diagnostics`](/docs/diagnostics) is installed. **Default `true`** (a no-op when the diagnostics package is absent).
+
+<style>{`[data-req]{font-size:.7em;vertical-align:middle;margin-left:.4em;padding:.1em .5em;border-radius:999px;background:color-mix(in srgb, var(--color-fd-primary) 15%, transparent);color:var(--color-fd-primary);font-weight:600;text-transform:uppercase;letter-spacing:.03em}`}</style>

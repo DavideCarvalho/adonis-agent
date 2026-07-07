@@ -1,0 +1,107 @@
+---
+title: Testing
+description: Drive the agent offline — the FakeModelProvider and echoScript, and in-memory doubles for the store, sink, quota, and governance queries, all from @adonis-agora/agent/testing.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Everything the agent depends on is a seam, so a test can run a full turn with **no API key and no database**. The `@adonis-agora/agent/testing` subpath ships a deterministic model and in-memory doubles for every dependency.
+
+## The fake model
+
+`FakeModelProvider` is a deterministic, offline `ModelProvider`. You give it a **script** — a pure function of the turn's args and the turn index — and it streams the scripted text to the sink and optionally requests one tool call:
+
+```ts
+import { FakeModelProvider } from '@adonis-agora/agent/testing'
+
+const model = new FakeModelProvider((args, turnIndex) => {
+  if (turnIndex === 0) {
+    // first turn: ask to call a tool
+    return { text: 'Let me check that.', toolCall: { name: 'getWeather', input: { city: 'Lisbon' } } }
+  }
+  // second turn: finish with the tool result in hand
+  return { text: 'It is 21°C in Lisbon.' }
+})
+```
+
+`turnIndex` is derived from the message history (the count of assistant turns so far), so the script is a pure function of its inputs — deterministic and replay-safe, with no internal counter. A scripted turn can also report a `costUsd`, exactly as a gateway provider would, to exercise cost accounting.
+
+For the trivial case, `echoScript` streams a fixed reply and never calls a tool:
+
+```ts
+import { FakeModelProvider, echoScript } from '@adonis-agora/agent/testing'
+
+const model = new FakeModelProvider(echoScript('ok'))
+```
+
+## In-memory doubles
+
+Each infrastructure seam has an in-memory implementation of the same SPI:
+
+| Double | SPI | Notes |
+| --- | --- | --- |
+| `InMemoryAgentStore` | `AgentStore` | The behavioral twin of the [Lucid store](/docs/agent/stores/lucid) — threads, messages, tool calls, usage. |
+| `InMemoryTokenStreamSink` | `TokenStreamSink` | Buffers and replays deltas per run, so you can assert on streamed text. |
+| `InMemoryQuotaStore` | `QuotaStore` | A single-process daily quota for exercising the fail-closed budget gate. |
+| `InMemoryGovernanceQueries` | `AgentGovernanceQueries` | The read-model (spend by model/actor, usage trend, recent tool calls/threads) over in-memory data, with a settable `InMemoryModelPrice` table. |
+
+```ts
+import {
+  FakeModelProvider,
+  echoScript,
+  InMemoryAgentStore,
+  InMemoryTokenStreamSink,
+  InMemoryQuotaStore,
+} from '@adonis-agora/agent/testing'
+```
+
+## A minimal turn in a test
+
+Wire the fakes into an `AgentDepsFactory`, build an `InlineAgentRunner`, and start a run:
+
+```ts
+import {
+  AgentDepsFactory,
+  AgentRegistry,
+  ToolRegistry,
+  DefaultToolAuthorizer,
+  InlineAgentRunner,
+} from '@adonis-agora/agent'
+import {
+  FakeModelProvider,
+  echoScript,
+  InMemoryAgentStore,
+  InMemoryTokenStreamSink,
+} from '@adonis-agora/agent/testing'
+
+const store = new InMemoryAgentStore()
+const sink = new InMemoryTokenStreamSink()
+const registry = new ToolRegistry()
+const agents = new AgentRegistry()
+agents.register({ name: 'default' })
+
+const factory = new AgentDepsFactory({
+  model: new FakeModelProvider(echoScript('hello')),
+  store,
+  sink,
+  rolesPolicy: new DefaultToolAuthorizer(['ADMIN']),
+  registry,
+  agents,
+})
+
+const runner = new InlineAgentRunner(factory, store)
+const { runId } = await runner.start({
+  threadId: (await store.createThread({ actor: { id: 'u1', roles: ['ADMIN'] }, persona: 'default' })).id,
+  actor: { id: 'u1', roles: ['ADMIN'] },
+  userText: 'hi',
+})
+
+// collect the streamed text
+let text = ''
+const decoder = new TextDecoder()
+for await (const chunk of sink.subscribe(runId)) text += decoder.decode(chunk)
+```
+
+<Callout type="info" title="Because the fakes are behavioral twins">
+The in-memory store, sink, and quota implement the same SPIs as their production counterparts, so a test that passes against the fakes exercises the identical loop, governance, and accounting code paths — you're testing the real thing, just without the network or a database.
+</Callout>

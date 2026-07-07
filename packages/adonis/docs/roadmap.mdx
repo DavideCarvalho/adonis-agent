@@ -1,0 +1,81 @@
+---
+title: Roadmap
+description: What @adonis-agora/agent intentionally defers in 0.1.0 — the durable runner, the governance read-model and dashboard, a Telescope tab, the authz adapter, the data satellite, and an Agora-scoped React package. The seams exist; the features are not built yet.
+icon: Map
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+`@adonis-agora/agent` 0.1.0 ships a focused, governed core: a streaming agent loop, tool-calling with HITL, fail-closed authorization, quota and cost accounting, Lucid persistence, multi-agent delegation, and a testing kit — all on the **inline runner**. Several adjacent capabilities are intentionally **left out** of this release. The SPIs were designed with them in mind (the seams exist), but the features themselves are not built yet.
+
+<Callout type="info" title="Why call it out">
+  The point of this page is honesty about scope. If you're evaluating the library for one of the use cases below, you'll know it isn't in 0.1.0 — and roughly where it slots in when it lands.
+</Callout>
+
+---
+
+## Deferred for 0.1.0
+
+### The durable runner
+
+The headline deferral. The [agent loop](/docs/agent/concepts/agent-loop) was written against a hooks seam precisely so the *same* loop body can run either in-process or as a durable workflow — but only the inline runner ships today. Setting `durable: true` logs a warning and falls back to inline.
+
+The durable runner maps the loop's hooks onto [`@adonis-agora/durable`](/docs/durable) 0.7.0 primitives:
+
+- `step(name, fn)` → `ctx.localStep(name, fn)` — every side-effect becomes a replay-safe checkpoint.
+- `awaitApproval(call)` → `ctx.waitForSignal(token)` — a HITL approval that survives crashes, deploys, and month-long waits.
+- `runAgent(name, task)` → `ctx.child(...)` — delegation as a durable child workflow.
+
+That's what turns single-replica, in-memory streaming and approvals into crash-proof, horizontally-scaled runs.
+
+### The governance read-model + dashboard SPA
+
+`AgentGovernanceQueries` (spend by model/actor, usage trend, recent tool calls/threads) has an in-memory implementation in the [testing kit](/docs/agent/testing), but a **Lucid read-model** over the persisted tables — and the standalone governance **dashboard SPA** that consumes it — are not built yet. The cost/usage ledger they read from is already being written on every turn.
+
+### A Telescope "Agent" tab
+
+A first-party [Telescope](/docs/telescope) tab for live agent activity — in-flight runs, streaming tool calls, delegations, forbidden attempts — off the `agora:agent:*` diagnostics channel. The events are already published; the tab that visualizes them is future work.
+
+### The `@adonis-agora/authz` adapter
+
+Tools can declare an `ability`, and the `RolesPolicy` seam accepts an async `can(...)`, so an ability-aware gate drops straight in. A first-party [`@adonis-agora/authz`](/docs/authz) Bouncer adapter — resolving `bouncer.forUser(actor).allows(ability)` — is planned. Until then, the default role-based policy governs tools by `roles`. See [Authorization](/docs/agent/governance/authorization).
+
+### The `data` governed-SQL satellite
+
+A satellite that would let the agent run **governed SQL** — scoped, read-only, policy-checked queries as a first-class tool surface — is anticipated but not built.
+
+### An Agora-scoped React package
+
+The existing framework-agnostic `@dudousxd/nestjs-agent-react` client (`useAgentChat` / `AgentChatTransport`) already works **unchanged** against these routes, because the SSE contract is preserved byte-for-byte — see [Streaming & HTTP](/docs/agent/streaming-and-http#consuming-from-react). An **Agora-scoped republish** (matching branding and imports) is on the list, but it's ergonomics, not a capability gap.
+
+---
+
+## Deliberately dropped
+
+### Build-time codegen of tool wrappers
+
+The reference NestJS implementation used a codegen step. On AdonisJS that's unnecessary and intentionally **not** ported: the package registers an **Assembler `init` hook** that generates the typed `app/agent_tools` barrel at build/dev time (with a runtime `readdir` scan as the fallback), which is the idiomatic Adonis mechanism. See [Tools → discovery](/docs/agent/authoring/tools#discovery).
+
+---
+
+## What is in 0.1.0
+
+For contrast, the current release does ship:
+
+- **A governed agent loop** — model → tools → approval → model, capped by `maxSteps`, provider-agnostic. See [The agent loop](/docs/agent/concepts/agent-loop).
+- **Tool-calling** — `@AiTool` classes and `defineTool` functions, discovered from `app/agent_tools`, with `read` / `action` kinds and Standard Schema inputs. See [Tools](/docs/agent/authoring/tools).
+- **Fail-closed governance** — an ADMIN-only-by-default authorizer with the offered-and-invoke double check, and an actor resolver that never fabricates a caller. See [Authorization](/docs/agent/governance/authorization).
+- **Human-in-the-loop** — `action` tools pause for approve/reject. See [Streaming & HTTP](/docs/agent/streaming-and-http#human-in-the-loop).
+- **Quota & cost accounting** — a pre-model daily quota, a usage ledger, and cost that's real when a gateway reports it, estimated from a pricing table otherwise. See [Quota & cost](/docs/agent/governance/quota-and-cost).
+- **Multi-agent delegation** — named agents and synthesized `ask_<agent>` delegate tools. See [Personas & agents](/docs/agent/authoring/personas-and-agents).
+- **Streaming over SSE** — eleven `/agent` routes and a re-attachable token stream. See [Streaming & HTTP](/docs/agent/streaming-and-http).
+- **Lucid persistence** — five tables on Postgres / MySQL / SQLite, plus an in-memory twin. See [State stores](/docs/agent/stores/lucid).
+- **A testing kit** — a deterministic fake model and in-memory doubles for every seam. See [Testing](/docs/agent/testing).
+- **Structural diagnostics** — `agora:agent:*` events, captured by [Telescope](/docs/telescope) when present.
+
+---
+
+## Next steps
+
+- [Getting Started](/docs/agent/getting-started) — what you can build today.
+- [The agent loop](/docs/agent/concepts/agent-loop) — the seam the durable runner will plug into.

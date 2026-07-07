@@ -1,0 +1,95 @@
+---
+title: Lucid
+description: Persist threads, messages, tool calls, and token usage to Postgres, MySQL, or SQLite through @adonisjs/lucid — the five agent tables, the published migration, and the in-memory twin for tests.
+---
+
+import { Steps, Step } from 'fumadocs-ui/components/steps';
+import { Callout } from 'fumadocs-ui/components/callout';
+
+The `lucid` store persists an agent's durable state — threads, messages, tool calls, and the token-usage ledger — through [`@adonisjs/lucid`](https://lucid.adonisjs.com) on **Postgres, MySQL, or SQLite**. JSON payloads are stored as TEXT and timestamps as epoch-ms big integers, so the schema is dialect-portable. It ships **inside `@adonis-agora/agent`**; `@adonisjs/lucid` is an optional peer, imported lazily only when you select the `lucid` store.
+
+<Steps>
+<Step>
+
+## Publish the migration
+
+```bash
+node ace configure @adonis-agora/agent
+```
+
+`configure` (run by `add`) registers the provider, publishes `config/agent.ts`, and publishes the migration that creates the five agent tables.
+
+</Step>
+<Step>
+
+## Run the migration
+
+```bash
+node ace migration:run
+```
+
+</Step>
+<Step>
+
+## Select the store
+
+`store` names a key of the `stores` map. `stores.lucid()` rides your app's default Lucid connection — the driver resolves the `db` service for you at boot:
+
+```ts title="config/agent.ts"
+import { defineConfig, stores } from '@adonis-agora/agent'
+
+export default defineConfig({
+  model: () => aiSdkModel(openai('gpt-4o-mini')),
+  store: 'lucid',
+  stores: {
+    lucid: stores.lucid(),
+  },
+})
+```
+
+Pass `{ connection }` to target a non-default Lucid connection:
+
+```ts
+stores.lucid({ connection: 'agent' })
+```
+
+</Step>
+</Steps>
+
+## What the migration creates
+
+Five tables (names from the `AGENT_TABLES` constant):
+
+| Table | Purpose |
+| --- | --- |
+| `agent_thread` | one row per conversation: actor/tenant refs, title, persona, transient flag, `active_stream_id`, soft-delete (`deleted_at`), timestamps |
+| `agent_message` | one row per message: role, content, and JSON columns for `tool_calls` / `tool_results` / `follow_ups` / `usage` |
+| `agent_tool_call` | one row per tool call — **PK is the model-supplied `toolCallId`**, not a generated id — with tool name/type, input/output, status, timing, and `executed_by_ref` |
+| `agent_token_usage` | the usage ledger: input/output tokens, cache breakdown, `model_id`, `purpose`, and `cost_usd` |
+| `agent_model_pricing` | per-model pricing rows for cost estimation (see [Quota & cost](/docs/agent/governance/quota-and-cost)) |
+
+Threads are indexed on `(actor_ref, updated_at)` for list ordering, messages on `(thread_id, created_at)` for load, and usage on `(actor_ref, created_at)` so the daily quota scan stays fast. Booleans are stored as `INTEGER` (0/1) and timestamps as `BIGINT` epoch-ms — no dialect-only types.
+
+<Callout type="info" title="The model-supplied tool-call id is the primary key">
+A persisted tool call is addressable by exactly the id the model emitted — the same id a client sends to `POST /agent/tool-call/approve`. That invariant is what makes HITL approval resolve the right pending call.
+</Callout>
+
+## Behavior details
+
+- **`forkThread` and `truncateFrom` run in a transaction.** `forkThread` copies kept messages under fresh ids onto a new thread; `truncateFrom` deletes doomed messages' tool calls explicitly (not only via FK cascade) so it works on SQLite even without `PRAGMA foreign_keys=ON`.
+- **`appendMessage` bumps the thread's `updated_at`**, so thread lists reflect the latest activity.
+- **`quotaToday` sums input + output tokens over the inclusive UTC day.** Cache tokens are subsets and are never re-added, so the sum is the whole-day spend.
+
+## Own the schema yourself
+
+Prefer to build the tables from your own migration or a setup hook? The package exports `createAgentTables(db)` and the `createTableStatements()` DDL (plus `AGENT_TABLES`), so you can provision them directly. For quick starts and scripts, `stores.lucid({ autoCreateTables: true })` runs the idempotent `CREATE TABLE IF NOT EXISTS` DDL on first use — convenient for tests, but production should prefer the versioned migration.
+
+## The in-memory store for tests
+
+For tests and scratch apps, omit `store` (or select `memory`) to use `InMemoryAgentStore` — a single-process, non-durable **behavioral twin** of the Lucid store. It implements the same `AgentStore` SPI, so a test exercises the identical code paths without a database. It's exported from the [testing kit](/docs/agent/testing) along with the in-memory sink, quota, and governance-queries doubles.
+
+```ts
+import { InMemoryAgentStore } from '@adonis-agora/agent/testing'
+
+const store = new InMemoryAgentStore()
+```

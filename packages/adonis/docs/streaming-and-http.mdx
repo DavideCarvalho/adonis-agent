@@ -1,0 +1,97 @@
+---
+title: Streaming & HTTP
+description: The eleven /agent routes, the byte-for-byte SSE envelope, human-in-the-loop approve/reject, re-attaching to a live run, and consuming the stream from React.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+The provider mounts eleven routes under `config.path` (default `agent`) at boot. They cover the full chat lifecycle — start, stream, cancel, HITL, threads, and quota. No controllers to write; the provider resolves the actor, calls the framework-agnostic `AgentService`, and pipes the SSE.
+
+## The routes
+
+| # | Method & path | Purpose |
+| --- | --- | --- |
+| 1 | `POST /agent/chat` | Start a run. Resolves the actor, creates or continues a thread, and **streams the reply as SSE**. Body: `{ message, threadId?, agent?, persona?, pageContext? }`. |
+| 2 | `GET /agent/chat/:runId/stream` | **Re-attach** to a run's live token stream (reconnect / resume). |
+| 3 | `POST /agent/chat/:runId/cancel` | Abort a run. Returns `{ aborted: true }`. |
+| 4 | `POST /agent/tool-call/approve` | Approve a pending `action` tool call. Body: `{ runId, toolCallId }`. |
+| 5 | `POST /agent/tool-call/reject` | Reject a pending `action` tool call. Body: `{ runId, toolCallId, reason? }`. |
+| 6 | `GET /agent/threads` | List the actor's threads. |
+| 7 | `GET /agent/threads/personas/catalog` | The persona `{ id, label }` catalog for a UI picker. |
+| 8 | `GET /agent/threads/:id` | Thread detail (messages + `activeStreamId`), or `null`. |
+| 9 | `DELETE /agent/threads/:id` | Soft-delete a thread. |
+| 10 | `POST /agent/threads/:id/fork-from/:messageId` | Fork a thread up to a message (regenerate / branch). |
+| 11 | `GET /agent/quota/today` | The actor's token spend today: `{ usedTokens }`. |
+
+<Callout type="info" title="Actor-scoped routes fail closed">
+Routes that need identity — chat, threads list, quota — resolve the actor first. If the resolver throws (or none is configured), the route replies `401` and never runs. See [Authorization](/docs/agent/governance/authorization).
+</Callout>
+
+The persona catalog route is registered *before* `threads/:id` so it isn't captured by the `:id` param.
+
+## The SSE envelope
+
+`POST /agent/chat` and `GET /agent/chat/:runId/stream` reply with `Content-Type: text/event-stream` and this exact frame sequence:
+
+```text
+event: meta
+data: {"runId":"<uuid>","threadId":"<uuid>"}
+
+data: {"delta":"The "}
+data: {"delta":"weather "}
+data: {"delta":"in Lisbon is 21°C."}
+
+event: done
+data: {}
+```
+
+- A single **`meta`** frame first, carrying the `runId` and `threadId`.
+- One **`data`** frame per streamed chunk, each `{"delta": "<text>"}`.
+- A terminating **`done`** frame when the run completes.
+
+The response also sets `X-Agent-Run-Id` and `X-Agent-Thread-Id` headers (plus `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no` so proxies don't buffer the stream). The stream ends only on run **completion** — the token sink stays open across a HITL suspend, so an approved-then-resumed run keeps one continuous stream.
+
+## Human-in-the-loop
+
+When the model calls an `action` tool, the run records it `pending_approval` and pauses. The client learns the pending `toolCallId` from the thread detail (`GET /agent/threads/:id` → the tool call's status), then decides:
+
+```bash
+# approve
+curl http://localhost:3333/agent/tool-call/approve \
+  -H 'content-type: application/json' \
+  -d '{"runId":"<runId>","toolCallId":"<toolCallId>"}'
+
+# or reject, optionally with a reason fed back to the model
+curl http://localhost:3333/agent/tool-call/reject \
+  -H 'content-type: application/json' \
+  -d '{"runId":"<runId>","toolCallId":"<toolCallId>","reason":"not this account"}'
+```
+
+On approve, the loop runs the tool and continues; the `executed_by_ref` records who approved it. On reject, it records the rejection and feeds a rejection result back to the model, which continues the turn. Under the inline runner the decision resolves an in-memory promise keyed `${runId}:${toolCallId}`, so one run can never approve another's call.
+
+## Re-attaching to a run
+
+Streams survive a dropped connection. A late subscriber to `GET /agent/chat/:runId/stream` replays the run's buffered chunks first, then follows live until `done`. Combined with the thread's `activeStreamId`, a reloading client can find the in-flight run and rejoin its stream.
+
+<Callout type="warn" title="Single-replica today">
+Re-attach works because the token sink buffers per run in process memory. That makes it single-replica: a run started on one instance can only be re-attached on that same instance. Cross-instance resume is the durable runner's job — see the [Roadmap](/docs/agent/roadmap).
+</Callout>
+
+## Consuming from React
+
+The routes deliberately reproduce the SSE contract of the reference NestJS agent **byte-for-byte** — the same `meta` / `delta` / `done` envelope and the same run/thread headers. So the existing framework-agnostic React client, `@dudousxd/nestjs-agent-react`, works **unchanged** against these AdonisJS routes: point its `AgentChatTransport` at your `/agent` base URL and drive the UI with the `useAgentChat` hook.
+
+```tsx
+import { useAgentChat, AgentChatTransport } from '@dudousxd/nestjs-agent-react'
+
+const transport = new AgentChatTransport({ baseUrl: '/agent' })
+
+function Chat() {
+  const { messages, send, pending, approve, reject } = useAgentChat({ transport })
+  // pending exposes any action tool call awaiting a decision → approve/reject
+}
+```
+
+<Callout type="info" title="Why it just works">
+The client speaks to the HTTP + SSE contract, not to NestJS. Because this library preserves that contract exactly, no fork is needed today. An **Agora-scoped republish** of the React package (so the branding and imports match the rest of the ecosystem) is on the [Roadmap](/docs/agent/roadmap) — but it's ergonomics, not a capability gap.
+</Callout>

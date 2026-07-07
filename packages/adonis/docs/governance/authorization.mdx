@@ -1,0 +1,74 @@
+---
+title: Authorization
+description: The fail-closed governance model — the DefaultToolAuthorizer (ADMIN-only, role intersection), the offered-and-invoke double check, and the ActorResolver identity seam that never fabricates a caller.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Authorization in `@adonis-agora/agent` is **fail-closed**: nothing is reachable unless it's explicitly allowed, and the acting identity is never invented. Two seams enforce it — the **actor resolver** (who is calling) and the **roles policy** (what they may do).
+
+## The actor resolver — who is calling
+
+Every request resolves to an `Actor` (`{ id, roles?, tenantRef? }`) through the configured `ActorResolver`. This is the identity seam, and it is deliberately hostile to accidents:
+
+<Callout type="warn" title="No resolver, no service">
+When `config/agent.ts` sets no `actorResolver`, the provider installs `UnconfiguredActorResolver`, which **throws on every request**. The agent will not fabricate a caller from a default. A route whose actor can't be resolved replies `401` and short-circuits — it never runs the model.
+</Callout>
+
+Three resolvers ship:
+
+- **`AuthActorResolver`** (recommended) — reads Adonis's authenticated principal off `ctx.auth.user` (populated by `@adonisjs/auth`). Fail-closed: throws when no user is authenticated. Pass a `toActor` mapper when your user model doesn't expose `id` / `roles` / `tenantRef` directly:
+
+  ```ts
+  new AuthActorResolver({
+    toActor: (user) => ({
+      id: String(user.id),
+      roles: user.roleNames, // e.g. pulled from a relation
+      tenantRef: user.tenantId,
+    }),
+  })
+  ```
+
+- **`HeaderActorResolver`** (demos / gateways) — trusts `x-actor-id` (required), `x-actor-role` (comma-separated → `roles`), and `x-tenant-ref`. It throws when `x-actor-id` is absent and grants **no** default role (missing `x-actor-role` → `roles: []`, i.e. no tools). Only safe behind a gateway that strips and re-sets these headers from a verified principal.
+
+- **`UnconfiguredActorResolver`** — the throwing default described above.
+
+You can also implement `ActorResolver` yourself — it's a one-method interface, `resolve(req): Actor | Promise<Actor>`.
+
+## The roles policy — what they may do
+
+Tool authorization is a `RolesPolicy` — `can(actor, tool): boolean | Promise<boolean>`. The default binding is `DefaultToolAuthorizer`:
+
+- **Fail-closed, ADMIN-only by default.** A tool that declares no `roles` is invocable *only* by an actor holding one of the configured `defaultRoles` (`['ADMIN']` unless you override it).
+- **Set intersection.** Authorization is `actor.roles ∩ (tool.roles ?? defaultRoles) ≠ ∅`. Give a tool an explicit `roles: ['MEMBER']` to open it to non-admins.
+
+Configure it via `defaultRoles`, or swap the whole policy via `authorizer` (aliased `rolesPolicy`):
+
+```ts title="config/agent.ts"
+export default defineConfig({
+  // ...
+  defaultRoles: ['STAFF'], // roles a tool requires when it declares none
+})
+```
+
+## The double check
+
+Authorization runs **twice** through the same `can(actor, tool)`, which is what makes it defense-in-depth:
+
+1. **Offered-tools filter.** Before each model turn, `ToolRegistry.definitionsFor(actor, policy, allowedTools)` drops every tool the actor's role can't invoke — so a forbidden tool is never even described to the model. The persona/agent allow-list is applied on top as a second filter layer.
+2. **Invoke-time re-check.** When the loop actually runs a tool, `ToolRegistry.invoke` re-checks `policy.can(...)` (and re-validates the input schema) before calling the handler. Even if a tool leaked into a call, it's refused with `ToolForbiddenError`.
+
+<Callout type="info" title="The seam is stable so the policy is swappable">
+`DefaultToolAuthorizer` is a thin, explicitly-named binding over core's `DefaultRolesPolicy`. Apps that want an ability-aware gate swap only the binding, never the seam — so both filter layers pick up the new policy automatically.
+</Callout>
+
+## Ability-aware authorization (deferred adapter)
+
+Every tool can also declare an `ability` (e.g. `'refund.issue'`). The default role-based policy ignores it, but an *ability-aware* `RolesPolicy` would consult it — e.g. a [`@adonis-agora/authz`](/docs/authz) Bouncer adapter resolving `bouncer.forUser(actor).allows(ability)`. Because `can` may return a promise, an async authz check drops straight into the same seam. That Bouncer adapter is on the [Roadmap](/docs/agent/roadmap); `roles` and `ability` already share the SPI, so you can declare abilities now and light them up later.
+
+## What governance covers
+
+- Which tools an actor's **role** may reach (this page).
+- Which tools a **persona/agent** exposes — a second allow-list layer. See [Personas & agents](/docs/agent/authoring/personas-and-agents).
+- Which tools need a **human** before they run — the `action` kind and HITL. See [Streaming & HTTP](/docs/agent/streaming-and-http#human-in-the-loop).
+- How much an actor may **spend** — the daily quota, checked before the model runs. See [Quota & cost](/docs/agent/governance/quota-and-cost).

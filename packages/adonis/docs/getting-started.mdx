@@ -1,0 +1,172 @@
+---
+title: Getting Started
+description: Run your first governed agent in an AdonisJS app — install, configure a model and store, run the migration, define a tool, and stream a chat over SSE.
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Steps, Step } from 'fumadocs-ui/components/steps';
+
+This guide gets a governed, streaming agent running in an AdonisJS app in a few minutes. You'll wire a model, persist to SQL with Lucid, declare one tool, and stream a reply from `POST /agent/chat`.
+
+## 1. Install & configure
+
+<Tabs items={['node ace', 'manual']}>
+
+<Tab value="node ace">
+
+```bash
+node ace add @adonis-agora/agent
+```
+
+`add` installs the package, registers `@adonis-agora/agent/agent_provider` in `adonisrc.ts`, registers the Assembler `init` hook that generates the typed `app/agent_tools` barrel, and publishes both `config/agent.ts` and the Lucid migration for the five agent tables.
+
+</Tab>
+
+<Tab value="manual">
+
+```bash
+npm i @adonis-agora/agent
+node ace configure @adonis-agora/agent
+```
+
+`configure` runs the same codemods as `add` — register the provider, register the tools barrel hook, publish the config and the migration.
+
+</Tab>
+
+</Tabs>
+
+You'll also need an LLM provider SDK for the AI SDK adapter — for example `@ai-sdk/openai`:
+
+```bash
+npm i ai @ai-sdk/openai zod
+```
+
+## 2. Configure a model, store, and identity
+
+Only `model` is required. Below we also select the `lucid` store (SQL persistence) and wire `AuthActorResolver`, which reads your authenticated principal off `ctx.auth.user`.
+
+```ts title="config/agent.ts"
+import { defineConfig, stores, AuthActorResolver } from '@adonis-agora/agent'
+import { aiSdkModel } from '@adonis-agora/agent/ai-sdk'
+import { openai } from '@ai-sdk/openai'
+
+export default defineConfig({
+  // A lazy thunk keeps the provider SDK peer imported only at boot.
+  model: () => aiSdkModel(openai('gpt-4o-mini')),
+
+  store: 'lucid',
+  stores: {
+    memory: stores.memory(),
+    lucid: stores.lucid(),
+  },
+
+  // Identity seam — fail-closed. Without a resolver, every request 401s.
+  actorResolver: new AuthActorResolver(),
+
+  // The implicit single agent. Omit for a bare assistant.
+  defaultAgent: {
+    systemPrompt: 'You are a helpful assistant for our app.',
+  },
+})
+```
+
+<Callout type="warn" title="No identity is ever fabricated">
+The actor resolver defaults to one that **throws on every request**. The agent will not invent a caller. In development you can use `HeaderActorResolver` (trusts `x-actor-id` / `x-actor-role` headers) behind a trusted gateway, but production should read a verified principal. See [Authorization](/docs/agent/governance/authorization).
+</Callout>
+
+<Callout type="info">
+`aiSdkModel` adapts any [Vercel AI SDK](https://sdk.vercel.ai) v7 `LanguageModel` to the agent's `ModelProvider` — pass `openai(...)`, `anthropic(...)`, a gateway model, etc. Prefer a different LLM library? Implement the tiny `ModelProvider` SPI (`runTurn`) yourself.
+</Callout>
+
+## 3. Run the migration
+
+The `lucid` store persists to five tables (threads, messages, tool calls, token usage, model pricing). Apply the published migration:
+
+```bash
+node ace migration:run
+```
+
+Omitting `store` entirely uses the in-memory store — single-process, no migration — which is perfect for a first spin or for tests. See [State stores](/docs/agent/stores/lucid).
+
+## 4. Define a tool
+
+Tools live under `app/agent_tools` and are discovered at boot. A `read` tool auto-executes; an `action` tool requires human approval. Declare an `@AiTool` class implementing `execute`:
+
+```ts title="app/agent_tools/get_weather.ts"
+import { AiTool } from '@adonis-agora/agent'
+import type { AiToolCtx, ToolHandler } from '@adonis-agora/agent'
+import { z } from 'zod'
+
+@AiTool({
+  name: 'getWeather',
+  kind: 'read',
+  description: 'Current weather for a city.',
+  input: z.object({ city: z.string() }),
+  roles: ['MEMBER'],
+})
+export default class GetWeatherTool implements ToolHandler<{ city: string }> {
+  async execute(input: { city: string }, ctx: AiToolCtx) {
+    // ctx.actor, ctx.threadId, ctx.runId are all available here.
+    return { city: input.city, tempC: 21 }
+  }
+}
+```
+
+<Callout type="warn" title="Tools are fail-closed">
+A tool that declares no `roles` inherits `defaultRoles` — `['ADMIN']` by default. Give a tool an explicit `roles` list (like `['MEMBER']` above) so non-admin actors can reach it. A tool the actor's role can't invoke is never even shown to the model. See [Authorization](/docs/agent/governance/authorization).
+</Callout>
+
+Prefer a function to a class? Use `defineTool`:
+
+```ts title="app/agent_tools/purge_cache.ts"
+import { defineTool } from '@adonis-agora/agent'
+import { z } from 'zod'
+
+export const purgeCache = defineTool(
+  {
+    name: 'purgeCache',
+    kind: 'action', // requires HITL approval before it runs
+    description: 'Purge a cache key.',
+    input: z.object({ key: z.string() }),
+    roles: ['ADMIN'],
+  },
+  async ({ key }, ctx) => {
+    // ... perform the purge
+    return { purged: key }
+  },
+)
+```
+
+## 5. Chat
+
+The provider mounts the `/agent` routes at boot. Start a run:
+
+```bash
+curl -N http://localhost:3333/agent/chat \
+  -H 'content-type: application/json' \
+  -d '{"message":"What is the weather in Lisbon?"}'
+```
+
+The reply streams back as Server-Sent Events:
+
+```text
+event: meta
+data: {"runId":"...","threadId":"..."}
+
+data: {"delta":"The "}
+data: {"delta":"weather "}
+...
+event: done
+data: {}
+```
+
+The `X-Agent-Run-Id` and `X-Agent-Thread-Id` response headers carry the same ids, so a client can re-attach to a run's stream after a dropped connection. That's it — a governed agent that streams tokens, runs a role-gated tool, and records the whole exchange.
+
+## Next steps
+
+- [The agent loop](/docs/agent/concepts/agent-loop) — the turn state machine and the runner seam.
+- [Authoring tools](/docs/agent/authoring/tools) — kinds, schemas, discovery, and roles.
+- [Personas & agents](/docs/agent/authoring/personas-and-agents) — personas and multi-agent delegation.
+- [Streaming & HTTP](/docs/agent/streaming-and-http) — every route, the SSE envelope, and HITL.
+- [Configuration reference](/docs/agent/config-reference) — every `AgentConfig` field.

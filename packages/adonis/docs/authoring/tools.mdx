@@ -1,0 +1,138 @@
+---
+title: Tools
+description: Give the agent things to do — @AiTool classes and defineTool functions, discovered from app/agent_tools, with read/action kinds, Standard Schema inputs, and role/ability gating.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+Tools are what turn a chatbot into an agent. A tool is a named capability with a typed input schema and a handler; the model decides *when* to call it, and the agent loop decides *whether* it may (role gate) and *how* (auto-execute vs. human approval). There are two ways to author one, and both register the same way.
+
+## `@AiTool` classes
+
+Decorate a class that implements `execute(input, ctx)`:
+
+```ts title="app/agent_tools/get_order.ts"
+import { AiTool } from '@adonis-agora/agent'
+import type { AiToolCtx, ToolHandler } from '@adonis-agora/agent'
+import { z } from 'zod'
+
+@AiTool({
+  name: 'getOrder',
+  kind: 'read',
+  description: 'Fetch an order by id for the current customer.',
+  input: z.object({ orderId: z.string() }),
+  roles: ['MEMBER'],
+})
+export default class GetOrderTool implements ToolHandler<{ orderId: string }> {
+  async execute(input: { orderId: string }, ctx: AiToolCtx) {
+    // ctx carries the acting identity and thread — scope your query to it.
+    return await Order.query()
+      .where('id', input.orderId)
+      .where('customer_ref', ctx.actor.id)
+      .firstOrFail()
+  }
+}
+```
+
+The decorator stamps its options onto the class; discovery instantiates it once and binds `execute`.
+
+## `defineTool` functions
+
+For a plain function, `defineTool(options, execute)` returns a branded `{ spec, handler }` that discovery picks up the same way:
+
+```ts title="app/agent_tools/purge_cache.ts"
+import { defineTool } from '@adonis-agora/agent'
+import { z } from 'zod'
+
+export const purgeCache = defineTool(
+  {
+    name: 'purgeCache',
+    kind: 'action',
+    description: 'Purge a cache key.',
+    input: z.object({ key: z.string() }),
+    roles: ['ADMIN'],
+  },
+  async ({ key }, ctx) => {
+    await cache.forget(key)
+    return { purged: key }
+  },
+)
+```
+
+You can also pass functional tools directly to the config instead of a file: `defineConfig({ tools: [purgeCache] })`.
+
+## Tool kinds
+
+The `kind` decides how the loop treats a call:
+
+| Kind | Behavior |
+| --- | --- |
+| `read` | **Auto-executes.** Recorded as `auto_executed`, then invoked immediately. Use for anything safe to run without a human — lookups, reads, computations. |
+| `action` | **Requires approval (HITL).** Recorded as `pending_approval`; the run pauses until a human approves or rejects it. Use for anything that mutates state or has side effects. See [Streaming & HTTP](/docs/agent/streaming-and-http#human-in-the-loop). |
+
+<Callout type="info" title="The agent kind is synthesized, never authored">
+Core also has an `agent` kind for delegation, but you never write it. It's synthesized from an agent's `delegatesTo` edges as `ask_<target>` tools. See [Personas & agents](/docs/agent/authoring/personas-and-agents).
+</Callout>
+
+## Input schemas — Standard Schema
+
+A tool's `input` is a [Standard Schema](https://standardschema.dev) — so **Zod, Valibot, or ArkType** all work. The schema does double duty:
+
+1. The provider converts it into the JSON schema the model sees as the tool's parameters.
+2. The loop **re-validates** the model's arguments against it (`~standard.validate`) before your handler runs — bad input throws `ToolInputInvalidError` and never reaches `execute`.
+
+<Callout type="info">
+Zod 3 doesn't expose the Standard JSON Schema extension, so the AI SDK adapter recognizes it by its `zod` vendor tag and converts it natively; Valibot, ArkType, and Zod 4 carry the extension and are converted through it. A bare schema the adapter can't introspect degrades to a permissive object schema for the model — but the loop still validates the real schema before running the tool.
+</Callout>
+
+## Roles & ability
+
+Two optional governance fields on every tool:
+
+- **`roles: string[]`** — the roles allowed to invoke it. Omit it and the tool inherits the config's `defaultRoles` (`['ADMIN']` unless you change it). Authorization is a plain set intersection of the actor's roles against the tool's. A tool the actor can't reach is never even offered to the model.
+- **`ability: string`** — an authorization ability name (e.g. `'cache.purge'`) consumed by an *ability-aware* `RolesPolicy` such as a future [`@adonis-agora/authz`](/docs/authz) Bouncer adapter. The default role-based policy ignores it. Both live on the same seam, so neither is required.
+
+See [Authorization](/docs/agent/governance/authorization) for the full governance model.
+
+## The tool context
+
+Every handler receives an `AiToolCtx` as its second argument:
+
+```ts
+interface AiToolCtx {
+  actor: { id: string; roles?: string[]; tenantRef?: string }
+  threadId: string
+  runId: string
+  requestId: string
+  persona?: Persona
+  pageContext?: PageContext
+  host?: unknown // optional host handle (e.g. an ORM manager)
+}
+```
+
+Identity is single-sourced on `ctx.actor` — read `ctx.actor.id` / `ctx.actor.tenantRef` and scope every query to it. Never trust an id the model passes in its arguments.
+
+## Discovery
+
+Tools are registered at boot from two possible sources, in order:
+
+<Tabs items={['Generated barrel (default)', 'Runtime scan (fallback)']}>
+
+<Tab value="Generated barrel (default)">
+
+When you configure the package, an Assembler `init` hook is registered that generates a typed `app/agent_tools` barrel at build/dev time (`.adonisjs/agent/tools.js`). The provider imports it — no runtime `readdir`. This mirrors how [`@adonis-agora/durable`](/docs/durable) generates its steps/workflows barrels.
+
+</Tab>
+
+<Tab value="Runtime scan (fallback)">
+
+If the generated barrel is absent, the provider falls back to recursively scanning `app/agent_tools` at boot, importing every module and registering each exported `@AiTool` class / `defineTool` tool. Only the environment-appropriate extension (`.ts` in dev, `.js` in a build) is imported, and each export is registered once — so a built `.js` and a dev `.ts` never double-register.
+
+</Tab>
+
+</Tabs>
+
+<Callout type="info" title="First wins">
+A tool name already registered is skipped — the first registration wins. Registration order is discovery (barrel or scan) first, then config-level `tools`, then synthesized delegate tools. Names must be unique across all of them.
+</Callout>

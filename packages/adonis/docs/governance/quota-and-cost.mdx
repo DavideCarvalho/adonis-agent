@@ -1,0 +1,87 @@
+---
+title: Quota & cost
+description: Meter agent spend — a fail-closed daily token quota checked before the model runs, a per-turn usage ledger with real or estimated cost, and the model pricing table.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Once an agent can spend tokens on a user's behalf, you want a budget and a bill. `@adonis-agora/agent` gives you a **daily token quota** checked before each turn and a **usage ledger** that records every turn's tokens and cost.
+
+## The daily quota
+
+A `QuotaStore` is a two-method seam:
+
+```ts
+interface QuotaStore {
+  check(actorRef: string, day: string): Promise<QuotaState> // { usedTokens, limitTokens, withinLimit }
+  bump(actorRef: string, day: string, tokens: number): Promise<void>
+}
+```
+
+The loop uses it in two places:
+
+- **`check` runs before the first model call.** If the actor is over budget for the day, the turn throws `QuotaExceededError` and **no tokens are spent** — the model is never called. This is the fail-closed, pre-model gate.
+- **`bump` runs after each model turn**, adding that turn's `inputTokens + outputTokens` to the day's total.
+
+The `day` (`YYYY-MM-DD`, UTC) is stamped once by the runner and threaded through the loop, so quota-by-day stays deterministic under replay.
+
+<Callout type="warn" title="Quota is opt-in, and off means open">
+Omit `quota` in the config and quotas are **disabled** — the loop skips the check and bump entirely (fail-open on budget). When you *do* configure a quota store, the budget gate is fail-closed. Wire one to enforce spend limits:
+
+```ts title="config/agent.ts"
+import { InMemoryQuotaStore } from '@adonis-agora/agent/testing'
+
+export default defineConfig({
+  // ...
+  quota: () => new InMemoryQuotaStore(/* daily limit */),
+})
+```
+
+The in-memory quota store is single-process (great for tests and small apps); a distributed store (e.g. Redis) is a natural custom implementation of the same two methods.
+</Callout>
+
+A client reads its remaining budget from `GET /agent/quota/today`, which returns `{ usedTokens }` for the actor — summed from the usage ledger over the UTC day.
+
+## The usage ledger
+
+Every model turn is recorded to the `agent_token_usage` table via `store.recordUsage(...)`, independently of whether a quota is enforced. Each row carries:
+
+- `input_tokens` / `output_tokens` — the turn's token counts.
+- `cache_write_tokens` / `cache_read_tokens` — prompt-cache breakdown when the provider reports it. **These are subsets of `input_tokens`, never added on top** — so token totals and quota don't change when a breakdown is present.
+- `model_id` — the model actually used. A provider-reported model id wins over the configured fallback, so cost can't misattribute to the wrong model.
+- `purpose` — `chat` for turns (the SPI also allows `title` / `follow_ups` / `summary`).
+- `cost_usd` — the provider's **actual** cost when a gateway reports it (see below), else null.
+
+Reasoning tokens, when reported, are a subset of `output_tokens` — observability only, billed at the output rate.
+
+## Cost — real when known, estimated otherwise
+
+There are two ways a turn gets a dollar figure:
+
+1. **The provider reports it.** A gateway knows the real spend. The AI SDK adapter reads the [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) shape (`providerMetadata.gateway.cost`) and OpenRouter (`total_cost`), and persists it verbatim as `cost_usd`. The governance read-model uses this figure as-is.
+
+2. **Estimated from the pricing table.** A direct provider (Anthropic / OpenAI / Bedrock) reports only tokens. For those, cost is estimated from the `agent_model_pricing` table:
+
+   ```text
+   cost = inputTokens/1e6 * inputPricePer1m + outputTokens/1e6 * outputPricePer1m
+   ```
+
+   against the *current* pricing row for the model. An unpriced model contributes **0** cost — its tokens still count toward quota and totals, it just has no dollar estimate until you add a pricing row.
+
+### The pricing table
+
+`agent_model_pricing` is one row per model per effective period:
+
+| Column | Meaning |
+| --- | --- |
+| `model_id` | the model the row prices |
+| `input_price_per_1m` / `output_price_per_1m` | USD per 1M input / output tokens |
+| `cache_write_price_per_1m` / `cache_read_price_per_1m` | optional cache rates (write ≈ 1.25× input, read ≈ 0.1× input) |
+| `effective_from` | epoch-ms the price took effect |
+| `is_current` | whether this is the active row for the model |
+
+Seed it with the current prices for the models you use; leave it empty and you still get token accounting, just no cost estimate.
+
+## The governance read-model (deferred surfaces)
+
+Cost/usage aggregation lives behind one interface, `AgentGovernanceQueries` — `spendByModel`, `spendByActor`, `usageTrend`, `recentToolCalls`, `recentThreads` — so a dashboard and a Telescope tab can consume the same rolled-up numbers. The in-memory implementation ships in the [testing kit](/docs/agent/testing); a Lucid read-model and the governance dashboard / Telescope "Agent" tab that consume it are on the [Roadmap](/docs/agent/roadmap).
