@@ -1,0 +1,98 @@
+{
+  "name": "@adonis-agora/agent",
+  "version": "0.1.0",
+  "description": "Governed, durable-backed AI agent (chat + tool-calling + governance) for AdonisJS — part of the Agora ecosystem.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavideCarvalho/adonis-agent.git",
+    "directory": "packages/adonis"
+  },
+  "author": "Davi Carvalho <davi@goflip.ai>",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js",
+      "default": "./dist/src/index.js"
+    },
+    "./ai-sdk": {
+      "types": "./dist/src/ai-sdk/index.d.ts",
+      "import": "./dist/src/ai-sdk/index.js",
+      "default": "./dist/src/ai-sdk/index.js"
+    },
+    "./testing": {
+      "types": "./dist/src/testing/index.d.ts",
+      "import": "./dist/src/testing/index.js",
+      "default": "./dist/src/testing/index.js"
+    },
+    "./types": {
+      "types": "./dist/src/types.d.ts",
+      "import": "./dist/src/types.js",
+      "default": "./dist/src/types.js"
+    }
+  },
+  "files": ["dist/", "README.md", "CHANGELOG.md"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@standard-schema/spec": "^1.0.0"
+  },
+  "peerDependencies": {
+    "@adonisjs/core": "^7.3.0",
+    "@adonisjs/lucid": "^22.4.0",
+    "@adonis-agora/durable": "^0.7.0",
+    "@adonis-agora/diagnostics": "^0.1.0",
+    "ai": "^7.0.0",
+    "zod": "^3.23.0 || ^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@adonisjs/core": {
+      "optional": true
+    },
+    "@adonisjs/lucid": {
+      "optional": true
+    },
+    "@adonis-agora/durable": {
+      "optional": true
+    },
+    "@adonis-agora/diagnostics": {
+      "optional": true
+    },
+    "ai": {
+      "optional": true
+    },
+    "zod": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "ai": "^7.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^3.0.0",
+    "zod": "^3.25.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "keywords": [
+    "adonisjs",
+    "adonis",
+    "ai",
+    "agent",
+    "llm",
+    "tool-calling",
+    "governance",
+    "ai-sdk",
+    "durable",
+    "agora"
+  ]
+}
