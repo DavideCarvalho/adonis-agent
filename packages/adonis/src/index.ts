@@ -26,3 +26,64 @@ export {
   type AgentLoopHooks,
 } from './agent-loop.js';
 export * from './diagnostics.js';
+
+// ── Wave 2: Adonis integration shell ─────────────────────────────────────────
+export { defineConfig, stores } from './define_config.js';
+export type {
+  AgentConfig,
+  DefaultAgentOptions,
+  ModelFactory,
+  SinkFactory,
+  QuotaFactory,
+  StoreContext,
+  StoreFactory,
+  LucidStoreConfig,
+  MemoryStoreConfig,
+} from './define_config.js';
+export {
+  AiTool,
+  defineTool,
+  readAiToolMeta,
+  isBrandedFunctionalTool,
+  AI_TOOL_META_KEY,
+  AGENT_TOOL_BRAND,
+} from './ai-tool-ref.js';
+export type {
+  AiToolOptions,
+  AiToolMeta,
+  ToolClass,
+  FunctionalTool,
+  BrandedFunctionalTool,
+} from './ai-tool-ref.js';
+export {
+  discoverTools,
+  registerToolExport,
+  registerFunctionalTool,
+  registerToolsFromBarrel,
+} from './tool-discovery.js';
+export type { ToolsBarrel, RegisteredTool } from './tool-discovery.js';
+export { AgentDepsFactory, delegateToolName, registerDelegateTools } from './agent-deps-factory.js';
+export type { AgentDepsFactoryConfig } from './agent-deps-factory.js';
+export { utcDay } from './agent-deps.js';
+export type { AgentDeps } from './agent-deps.js';
+export { InProcessTokenStreamSink } from './in-process-sink.js';
+export {
+  UnconfiguredActorResolver,
+  HeaderActorResolver,
+  AuthActorResolver,
+} from './actor-resolver.js';
+export type { AuthActorResolverOptions } from './actor-resolver.js';
+export { AgentService } from './agent-service.js';
+export type { ChatParams } from './agent-service.js';
+export { DefaultToolAuthorizer } from './authorizer.js';
+export type { RolesPolicy as ToolAuthorizer } from './spi/roles-policy.js';
+export { InlineAgentRunner } from './runners/inline-agent-runner.js';
+export { LucidAgentStore } from './stores/lucid.js';
+export type {
+  LucidAgentStoreOptions,
+  LucidDatabaseLike,
+  LucidClientLike,
+  LucidQueryBuilderLike,
+  LucidInsertBuilderLike,
+} from './stores/lucid.js';
+export { createTableStatements, createAgentTables, AGENT_TABLES } from './stores/lucid-schema.js';

@@ -1,0 +1,112 @@
+{{{
+  exports({ to: app.migrationsPath(`${new Date().getTime()}_create_agent_tables.ts`) })
+}}}
+import { BaseSchema } from '@adonisjs/lucid/schema'
+
+/**
+ * The five tables for the @adonis-agora/agent `lucid` store: threads, messages, tool calls, token
+ * usage and model pricing. JSON payloads (tool calls/results, follow-ups, usage, tool input/output)
+ * are stored as TEXT — the store (de)serializes them — booleans as INTEGER (0/1), and timestamps as
+ * epoch-ms integers, so the schema is portable across SQLite / Postgres / MySQL. The `agent_tool_call`
+ * primary key is the model-supplied `toolCallId`, not a generated id.
+ */
+export default class extends BaseSchema {
+  async up() {
+    this.schema.createTable('agent_thread', (table) => {
+      table.string('id').primary()
+      table.string('actor_ref').notNullable()
+      table.string('tenant_ref')
+      table.text('title').notNullable()
+      table.string('persona').notNullable().defaultTo('default')
+      table.integer('transient').notNullable().defaultTo(0)
+      table.bigInteger('pinned_at')
+      table.text('summary')
+      table.integer('summary_message_count').notNullable().defaultTo(0)
+      table.string('active_stream_id')
+      table.bigInteger('created_at').notNullable()
+      table.bigInteger('updated_at').notNullable()
+      table.bigInteger('deleted_at')
+      table.index(['actor_ref', 'updated_at'], 'agent_thread_actor_updated_idx')
+    })
+
+    this.schema.createTable('agent_message', (table) => {
+      table.string('id').primary()
+      table
+        .string('thread_id')
+        .notNullable()
+        .references('id')
+        .inTable('agent_thread')
+        .onDelete('CASCADE')
+      table.string('role').notNullable()
+      table.text('content').notNullable()
+      table.text('tool_calls')
+      table.text('tool_results')
+      table.text('follow_ups')
+      table.text('usage')
+      table.string('persona')
+      table.bigInteger('created_at').notNullable()
+      table.index(['thread_id', 'created_at'], 'agent_message_thread_created_idx')
+    })
+
+    this.schema.createTable('agent_tool_call', (table) => {
+      // PK = the model-supplied toolCallId, not a generated id.
+      table.string('id').primary()
+      table
+        .string('message_id')
+        .notNullable()
+        .references('id')
+        .inTable('agent_message')
+        .onDelete('CASCADE')
+      table.string('tool_name').notNullable()
+      table.string('tool_type').notNullable()
+      table.text('input')
+      table.text('output')
+      table.string('status').notNullable()
+      table.string('executed_by_ref')
+      table.integer('execution_ms')
+      table.text('error')
+      table.bigInteger('created_at').notNullable()
+      table.bigInteger('executed_at')
+    })
+
+    this.schema.createTable('agent_token_usage', (table) => {
+      table.string('id').primary()
+      table
+        .string('thread_id')
+        .notNullable()
+        .references('id')
+        .inTable('agent_thread')
+        .onDelete('CASCADE')
+      table.string('actor_ref').notNullable()
+      table.string('message_id')
+      table.string('model_id').notNullable()
+      table.string('purpose').notNullable()
+      table.integer('input_tokens').notNullable()
+      table.integer('output_tokens').notNullable()
+      table.integer('cache_write_tokens')
+      table.integer('cache_read_tokens')
+      table.double('cost_usd')
+      table.bigInteger('created_at').notNullable()
+      table.index(['actor_ref', 'created_at'], 'agent_token_usage_actor_created_idx')
+    })
+
+    this.schema.createTable('agent_model_pricing', (table) => {
+      table.string('id').primary()
+      table.string('model_id').notNullable()
+      table.double('input_price_per_1m').notNullable()
+      table.double('output_price_per_1m').notNullable()
+      table.double('cache_write_price_per_1m')
+      table.double('cache_read_price_per_1m')
+      table.bigInteger('effective_from').notNullable()
+      table.integer('is_current').notNullable()
+    })
+  }
+
+  async down() {
+    this.schema.dropTableIfExists('agent_model_pricing')
+    this.schema.dropTableIfExists('agent_token_usage')
+    this.schema.dropTableIfExists('agent_tool_call')
+    this.schema.dropTableIfExists('agent_message')
+    this.schema.dropTableIfExists('agent_thread')
+  }
+}

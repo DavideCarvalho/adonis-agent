@@ -1,0 +1,133 @@
+import type { StandardSchemaV1 } from '@standard-schema/spec';
+import type { AgentDeps } from './agent-deps.js';
+import type { AgentRegistry } from './agent-registry.js';
+import type { AgentStore } from './spi/agent-store.js';
+import type { ModelProvider } from './spi/model-provider.js';
+import type { QuotaStore } from './spi/quota-store.js';
+import type { RolesPolicy } from './spi/roles-policy.js';
+import type { TokenStreamSink } from './spi/token-stream-sink.js';
+import type { ToolRegistry } from './tool-registry.js';
+import type { AgentDefinition, Persona } from './types.js';
+
+/** The synthesized `agent`-kind tool name an orchestrator uses to delegate to `target`. */
+export function delegateToolName(target: string): string {
+  return `ask_${target.replace(/[^a-zA-Z0-9]+/g, '_')}`;
+}
+
+/**
+ * The `{ task: string }` input a delegate (`agent`-kind) tool takes, as a zero-dependency Standard
+ * Schema so synthesizing delegate tools never pulls in `zod` (an optional peer). The loop validates
+ * against it before delegating.
+ */
+const delegateInputSchema: StandardSchemaV1<{ task: string }, { task: string }> = {
+  '~standard': {
+    version: 1,
+    vendor: '@adonis-agora/agent',
+    validate: (value: unknown) => {
+      if (
+        typeof value === 'object' &&
+        value !== null &&
+        typeof (value as { task?: unknown }).task === 'string'
+      ) {
+        return { value: { task: (value as { task: string }).task } };
+      }
+      return { issues: [{ message: 'expected { task: string }' }] };
+    },
+  },
+};
+
+/**
+ * Synthesize an `agent`-kind delegate tool for each `agent→agent` edge declared via `delegatesTo`, so
+ * an orchestrator can call `ask_<target>({ task })` to hand work to another registered agent. The loop
+ * handles delegation itself (never the handler), so the handler is a no-op. Skips names already taken.
+ * Returns the number of delegate tools registered.
+ */
+export function registerDelegateTools(registry: ToolRegistry, agents: AgentRegistry): number {
+  let count = 0;
+  for (const definition of agents.list()) {
+    for (const target of definition.delegatesTo ?? []) {
+      const name = delegateToolName(target);
+      if (registry.has(name)) continue;
+      const targetDefinition = agents.get(target);
+      // Only a flat string prompt is worth surfacing; a PromptBuilder is per-request source, so skip it.
+      const blurb =
+        typeof targetDefinition?.systemPrompt === 'string'
+          ? ` It is: ${targetDefinition.systemPrompt}`
+          : '';
+      registry.register(
+        {
+          name,
+          kind: 'agent',
+          targetAgent: target,
+          description: `Delegate a task to the "${target}" agent and get its answer.${blurb}`,
+          inputSchema: delegateInputSchema,
+        },
+        // Loop-handled (kind 'agent'); the handler is never called.
+        { execute: async () => ({}) },
+      );
+      count += 1;
+    }
+  }
+  return count;
+}
+
+/** The shared infrastructure the factory hands to every per-agent deps bundle. */
+export interface AgentDepsFactoryConfig {
+  model: ModelProvider;
+  store: AgentStore;
+  sink: TokenStreamSink;
+  rolesPolicy: RolesPolicy;
+  registry: ToolRegistry;
+  agents: AgentRegistry;
+  quota?: QuotaStore;
+  /** Name of the implicit default agent. Defaults to `'default'`. */
+  defaultAgentName?: string;
+}
+
+/**
+ * Builds the per-agent {@link AgentDeps} the runner feeds `runAgentLoop`. The single-agent case is
+ * just the `default` definition; a named agent (registered in the {@link AgentRegistry}) supplies its
+ * own prompt, personas, tool allow-list and step budget. Model/store/sink/roles are shared.
+ */
+export class AgentDepsFactory {
+  constructor(private readonly config: AgentDepsFactoryConfig) {}
+
+  defaultAgentName(): string {
+    return this.config.defaultAgentName ?? 'default';
+  }
+
+  private effectiveTools(definition: AgentDefinition | undefined): string[] | undefined {
+    if (definition === undefined) {
+      return undefined;
+    }
+    const delegated = (definition.delegatesTo ?? []).map(delegateToolName);
+    if (definition.tools === undefined && delegated.length === 0) {
+      return undefined; // no restriction
+    }
+    return [...(definition.tools ?? []), ...delegated];
+  }
+
+  forAgent(agentName?: string): AgentDeps {
+    const name = agentName ?? this.defaultAgentName();
+    const definition = this.config.agents.get(name);
+    const personas = new Map<string, Persona>();
+    for (const persona of definition?.personas ?? []) {
+      personas.set(persona.id, persona);
+    }
+    const toolAllowList = this.effectiveTools(definition);
+    return {
+      model: this.config.model,
+      store: this.config.store,
+      sink: this.config.sink,
+      rolesPolicy: this.config.rolesPolicy,
+      registry: this.config.registry,
+      systemPrompt: definition?.systemPrompt ?? 'You are a helpful assistant.',
+      maxSteps: definition?.maxSteps ?? 8,
+      personas,
+      defaultPersona: definition?.defaultPersona ?? 'default',
+      ...(definition?.modelId !== undefined ? { modelId: definition.modelId } : {}),
+      ...(this.config.quota !== undefined ? { quota: this.config.quota } : {}),
+      ...(toolAllowList !== undefined ? { toolAllowList } : {}),
+    };
+  }
+}

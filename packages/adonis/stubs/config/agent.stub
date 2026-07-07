@@ -1,0 +1,47 @@
+{{{
+  exports({ to: app.configPath('agent.ts') })
+}}}
+import { defineConfig, stores, AuthActorResolver } from '@adonis-agora/agent'
+// import { aiSdkModel } from '@adonis-agora/agent/ai-sdk'
+// import { openai } from '@ai-sdk/openai'
+
+/**
+ * Configuration for @adonis-agora/agent. Only `model` is required. Pick a `store` by name from the
+ * `stores` map (each driver's peer is imported lazily, only when selected); omit `store` for the
+ * in-memory store. The runner is in-process by default (`durable` is deferred). The actor resolver
+ * defaults to one that THROWS — the agent never fabricates a caller — so wire a real one.
+ *
+ * Publish the tables with `node ace migration:run` after configuring.
+ */
+export default defineConfig({
+  /**
+   * The LLM provider. Wrap the Vercel AI SDK via `aiSdkModel(...)` (from `@adonis-agora/agent/ai-sdk`)
+   * or supply any `ModelProvider`. A lazy thunk keeps the provider SDK peer imported only at boot:
+   *
+   *   model: () => aiSdkModel({ model: openai('gpt-4o-mini') }),
+   */
+  model: () => {
+    throw new Error('Configure a model in config/agent.ts (e.g. aiSdkModel({ model: ... }))')
+  },
+
+  store: 'lucid',
+  stores: {
+    memory: stores.memory(),
+    lucid: stores.lucid(),
+  },
+
+  // Identity seam — reads ctx.auth.user (fail-closed: throws when unauthenticated). Swap for your own
+  // resolver, or HeaderActorResolver behind a trusted gateway.
+  actorResolver: new AuthActorResolver(),
+
+  // path: 'agent',            // → /agent/chat, /agent/threads, ...
+  // defaultRoles: ['ADMIN'],  // roles a tool requires when it declares none (fail-closed)
+  // maxSteps: 8,              // cap on model↔tool iterations per turn
+
+  // The implicit default agent (base prompt, personas, tool allow-list). Omit for a bare assistant.
+  // defaultAgent: {
+  //   systemPrompt: 'You are a helpful assistant.',
+  //   personas: [{ id: 'default', label: 'Default', systemPrompt: 'You are a helpful assistant.' }],
+  //   defaultPersona: 'default',
+  // },
+})

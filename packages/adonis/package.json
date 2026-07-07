@@ -32,12 +32,33 @@
       "types": "./dist/src/types.d.ts",
       "import": "./dist/src/types.js",
       "default": "./dist/src/types.js"
+    },
+    "./agent_provider": {
+      "types": "./dist/providers/agent_provider.d.ts",
+      "import": "./dist/providers/agent_provider.js",
+      "default": "./dist/providers/agent_provider.js"
+    },
+    "./configure": {
+      "types": "./dist/configure.d.ts",
+      "import": "./dist/configure.js",
+      "default": "./dist/configure.js"
+    },
+    "./stores/lucid": {
+      "types": "./dist/src/stores/lucid.d.ts",
+      "import": "./dist/src/stores/lucid.js",
+      "default": "./dist/src/stores/lucid.js"
+    },
+    "./hooks/tools": {
+      "types": "./dist/src/hooks/tools.d.ts",
+      "import": "./dist/src/hooks/tools.js",
+      "default": "./dist/src/hooks/tools.js"
     }
   },
   "files": ["dist/", "README.md", "CHANGELOG.md"],
   "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && pnpm run copy:stubs",
+    "copy:stubs": "mkdir -p dist/stubs/config dist/stubs/database/migrations && cp stubs/config/agent.stub dist/stubs/config/agent.stub && cp -r stubs/database/migrations/. dist/stubs/database/migrations/",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit"
@@ -46,6 +67,7 @@
     "@standard-schema/spec": "^1.0.0"
   },
   "peerDependencies": {
+    "@adonisjs/assembler": "^8.4.0",
     "@adonisjs/core": "^7.3.0",
     "@adonisjs/lucid": "^22.4.0",
     "@adonis-agora/durable": "^0.7.0",
@@ -54,6 +76,9 @@
     "zod": "^3.23.0 || ^4.0.0"
   },
   "peerDependenciesMeta": {
+    "@adonisjs/assembler": {
+      "optional": true
+    },
     "@adonisjs/core": {
       "optional": true
     },
@@ -74,8 +99,13 @@
     }
   },
   "devDependencies": {
+    "@adonisjs/assembler": "^8.4.0",
+    "@adonisjs/core": "^7.3.0",
+    "@adonisjs/lucid": "^22.4.0",
     "@types/node": "^22.0.0",
     "ai": "^7.0.0",
+    "better-sqlite3": "^11.0.0",
+    "luxon": "^3.4.0",
     "typescript": "^5.4.0",
     "vitest": "^3.0.0",
     "zod": "^3.25.0"
