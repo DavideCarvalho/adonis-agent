@@ -2,6 +2,7 @@
   exports({ to: app.configPath('agent.ts') })
 }}}
 import { defineConfig, stores, AuthActorResolver } from '@adonis-agora/agent'
+// import { attachmentStores } from '@adonis-agora/agent'
 // import { aiSdkModel } from '@adonis-agora/agent/ai-sdk'
 // import { openai } from '@ai-sdk/openai'
 
@@ -37,6 +38,13 @@ export default defineConfig({
   // path: 'agent',            // → /agent/chat, /agent/threads, ...
   // defaultRoles: ['ADMIN'],  // roles a tool requires when it declares none (fail-closed)
   // maxSteps: 8,              // cap on model↔tool iterations per turn
+
+  // Multimodal uploads — mounts POST /agent/attachments, which stages a file into a model-fetchable
+  // MessageAttachment the client sends back with its next chat message. Bind your own store (presign
+  // S3/GCS or wrap your media pipeline); `attachmentStores.memory()` inlines bytes as a data: URL.
+  // attachmentStaging: attachmentStores.memory(),
+  // attachmentMaxBytes: 20 * 1024 * 1024,
+  // attachmentAllowedContentTypes: ['image/png', 'image/jpeg', 'application/pdf'],
 
   // The implicit default agent (base prompt, personas, tool allow-list). Omit for a bare assistant.
   // defaultAgent: {

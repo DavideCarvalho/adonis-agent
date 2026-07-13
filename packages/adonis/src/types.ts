@@ -114,12 +114,32 @@ export interface Decision {
 
 export type MessageRole = 'user' | 'assistant' | 'system';
 
+/**
+ * A file a user attached to a message so a vision-capable model sees it natively (an image, a PDF).
+ * The lib stays provider-agnostic: it passes {@link MessageAttachment.url} straight through as the
+ * model's image/file part data — making that URL reachable by the provider (a presigned URL, a proxy,
+ * or a `data:` URI) is the consumer's job. The lib never fetches bytes or talks to a store; that
+ * upload-time work is the {@link import('./spi/attachment-staging.js').AttachmentStagingStore} seam.
+ */
+export interface MessageAttachment {
+  /** Stable id of the stored media object in the consumer's media store. Provenance + replay key. */
+  mediaId: string;
+  /** A URL the model provider can fetch the bytes from at turn time. */
+  url: string;
+  /** MIME type — routes the part: `image/*` → image part, otherwise → file part. */
+  contentType: string;
+  /** Original filename, for display and the file part's filename. */
+  name: string;
+}
+
 /** A neutral chat message exchanged with the model. */
 export interface ModelMessage {
   role: MessageRole;
   content: string;
   toolCalls?: ToolCallRequest[];
   toolResults?: ToolResult[];
+  /** User-message attachments (image/PDF), rendered as native model content parts by the adapter. */
+  attachments?: MessageAttachment[];
 }
 
 export interface PageContext {
@@ -161,6 +181,8 @@ export interface AgentRunInput {
   actor: Actor;
   /** The latest user message text. */
   userText: string;
+  /** Files attached to the latest user message (image/PDF). Persisted with it and sent to the model. */
+  attachments?: MessageAttachment[];
   persona?: Persona;
   pageContext?: PageContext;
   isRegenerate?: boolean;
@@ -207,6 +229,8 @@ export interface StoredMessage {
   content: string;
   toolCalls?: ToolCallRequest[];
   toolResults?: ToolResult[];
+  /** Files the user attached to this message (image/PDF). Persisted with the message, replayed as-is. */
+  attachments?: MessageAttachment[];
   followUps?: string[];
   usage?: MessageUsage;
   createdAt: string;

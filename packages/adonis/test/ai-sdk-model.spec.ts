@@ -220,6 +220,82 @@ describe('aiSdkModel', () => {
     ]);
   });
 
+  it('maps a user message with an image attachment to text + image content parts', async () => {
+    const messages: ModelMessage[] = [
+      {
+        role: 'user',
+        content: 'what is in this picture?',
+        attachments: [
+          {
+            mediaId: 'm1',
+            url: 'https://example.test/pic.png',
+            contentType: 'image/png',
+            name: 'pic.png',
+          },
+        ],
+      },
+    ];
+
+    await aiSdkModel('openai/gpt-4o').runTurn({
+      system: '',
+      messages,
+      tools: [],
+      sink: createSink(),
+    });
+
+    const passed = streamTextMock.mock.calls[0]?.[0].messages;
+    expect(passed[0].role).toBe('user');
+    const parts = passed[0].content;
+    expect(parts[0]).toEqual({ type: 'text', text: 'what is in this picture?' });
+    expect(parts[1].type).toBe('image');
+    expect(parts[1].mediaType).toBe('image/png');
+    expect(String(parts[1].image)).toBe('https://example.test/pic.png');
+  });
+
+  it('maps a non-image attachment to a file content part', async () => {
+    const messages: ModelMessage[] = [
+      {
+        role: 'user',
+        content: 'summarize',
+        attachments: [
+          {
+            mediaId: 'm2',
+            url: 'https://example.test/report.pdf',
+            contentType: 'application/pdf',
+            name: 'report.pdf',
+          },
+        ],
+      },
+    ];
+
+    await aiSdkModel('openai/gpt-4o').runTurn({
+      system: '',
+      messages,
+      tools: [],
+      sink: createSink(),
+    });
+
+    const parts = streamTextMock.mock.calls[0]?.[0].messages[0].content;
+    expect(parts[1].type).toBe('file');
+    expect(parts[1].mediaType).toBe('application/pdf');
+    expect(parts[1].filename).toBe('report.pdf');
+    expect(String(parts[1].data)).toBe('https://example.test/report.pdf');
+  });
+
+  it('leaves a user message without attachments as a plain string (text-only unchanged)', async () => {
+    await aiSdkModel('openai/gpt-4o').runTurn({
+      system: '',
+      messages: [{ role: 'user', content: 'plain text' }],
+      tools: [],
+      sink: createSink(),
+    });
+
+    expect(streamTextMock.mock.calls[0]?.[0].messages[0]).toEqual({
+      role: 'user',
+      content: 'plain text',
+    });
+  });
+
   it('passes a Standard Schema through directly when it carries the JSON Schema converter', async () => {
     const inputSchema: StandardSchemaV1 & StandardJSONSchemaV1 = {
       '~standard': {

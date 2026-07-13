@@ -38,6 +38,28 @@ describe('LucidAgentStore', () => {
     expect(detail?.lastMessagePreview).toBe('hi there');
   });
 
+  it('round-trips user-message attachments (image/PDF) through the JSON column', async () => {
+    const thread = await store.createThread({ actor, persona: 'default' });
+    const attachments = [
+      { mediaId: 'm1', url: 'https://example.test/pic.png', contentType: 'image/png', name: 'pic.png' },
+      { mediaId: 'm2', url: 'https://example.test/r.pdf', contentType: 'application/pdf', name: 'r.pdf' },
+    ];
+    const stored = await store.appendMessage({
+      threadId: thread.id,
+      role: 'user',
+      content: 'look',
+      attachments,
+    });
+    expect(stored.attachments).toEqual(attachments);
+
+    const detail = await store.getThread(thread.id);
+    expect(detail?.messages[0]?.attachments).toEqual(attachments);
+    // A message with no attachments has no `attachments` field (back-compatible).
+    await store.appendMessage({ threadId: thread.id, role: 'assistant', content: 'ok' });
+    const reloaded = await store.getThread(thread.id);
+    expect(reloaded?.messages[1] && 'attachments' in reloaded.messages[1]).toBe(false);
+  });
+
   it('lists an actor threads newest-first and hides soft-deleted / transient ones', async () => {
     const a = await store.createThread({ actor, persona: 'default', title: 'A' });
     await store.createThread({ actor, persona: 'default', title: 'transient', transient: true });

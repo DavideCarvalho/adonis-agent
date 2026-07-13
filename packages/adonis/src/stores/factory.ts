@@ -1,6 +1,7 @@
 import type { ApplicationService } from '@adonisjs/core/types';
 import type { IngestDocument } from '../rag/ingest.js';
 import type { AgentStore } from '../spi/agent-store.js';
+import type { AttachmentStagingStore } from '../spi/attachment-staging.js';
 import type { EmbeddingProvider } from '../spi/embedding-provider.js';
 import type { AgentPricingStore } from '../spi/pricing-store.js';
 import type { QuotaStore } from '../spi/quota-store.js';
@@ -242,6 +243,49 @@ export const retrievers = {
         });
       }
       return new EmbeddingRetriever(embedder, store);
+    };
+  },
+};
+
+// ── Attachment-staging factories ─────────────────────────────────────────────
+
+/** Runtime context an {@link AttachmentStagingFactory} thunk receives — the booted application. */
+export type AttachmentStagingContext = StoreContext;
+
+/**
+ * A configured attachment-staging store: a lazy thunk the agent provider calls at boot to build the
+ * {@link AttachmentStagingStore} the optional `POST /agent/attachments` upload route stages through.
+ * Each factory imports its impl inside the thunk (like {@link stores}), so nothing is loaded until a
+ * staging store is actually selected.
+ */
+export type AttachmentStagingFactory = (
+  ctx: AttachmentStagingContext,
+) => AttachmentStagingStore | Promise<AttachmentStagingStore>;
+
+/**
+ * The attachment-staging factory namespace used in `config/agent.ts`, mirroring {@link stores}:
+ *
+ * ```ts
+ * export default defineConfig({
+ *   model: () => aiSdkModel({ model: '...' }),
+ *   attachmentStaging: attachmentStores.memory(),
+ * })
+ * ```
+ *
+ * A real deployment binds its own staging store (presigning against S3/GCS or wrapping the host's
+ * media pipeline) by passing an instance; `attachmentStores.memory` covers tests and the offline demo.
+ */
+export const attachmentStores = {
+  /**
+   * In-memory staging — encodes the uploaded bytes into a `data:` URL the model provider fetches
+   * inline (no external object store, no presigning). Single-process; handy for tests and dev apps.
+   */
+  memory(): AttachmentStagingFactory {
+    return async () => {
+      const { InMemoryAttachmentStagingStore } = await import(
+        '../testing/in-memory-attachment-staging.js'
+      );
+      return new InMemoryAttachmentStagingStore();
     };
   },
 };

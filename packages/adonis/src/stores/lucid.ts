@@ -7,6 +7,7 @@ import type {
   UpdateToolCallInput,
 } from '../spi/agent-store.js';
 import type {
+  MessageAttachment,
   MessageRole,
   MessageUsage,
   StoredMessage,
@@ -235,6 +236,7 @@ export class LucidAgentStore implements AgentStore {
           content: m.content,
           tool_calls: m.tool_calls ?? null,
           tool_results: m.tool_results ?? null,
+          attachments: m.attachments ?? null,
           follow_ups: m.follow_ups ?? null,
           usage: m.usage ?? null,
           persona: m.persona ?? null,
@@ -279,6 +281,7 @@ export class LucidAgentStore implements AgentStore {
       content: input.content,
       tool_calls: safeJson(input.toolCalls),
       tool_results: safeJson(input.toolResults),
+      attachments: safeJson(input.attachments),
       follow_ups: safeJson(input.followUps),
       usage: safeJson(input.usage),
       persona: input.persona ?? null,
@@ -296,6 +299,7 @@ export class LucidAgentStore implements AgentStore {
       createdAt: new Date(now).toISOString(),
       ...(input.toolCalls !== undefined ? { toolCalls: input.toolCalls } : {}),
       ...(input.toolResults !== undefined ? { toolResults: input.toolResults } : {}),
+      ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
       ...(input.followUps !== undefined ? { followUps: input.followUps } : {}),
       ...(input.usage !== undefined ? { usage: input.usage } : {}),
     };
@@ -405,6 +409,7 @@ function threadRowToSummary(row: Record<string, unknown>, lastPreview?: string):
 function rowToMessage(row: Record<string, unknown>): StoredMessage {
   const toolCalls = parseJson<ToolCallRequest[]>(row.tool_calls);
   const toolResults = parseJson<ToolResult[]>(row.tool_results);
+  const attachments = parseJson<MessageAttachment[]>(row.attachments);
   const followUps = parseJson<string[]>(row.follow_ups);
   const usage = parseJson<MessageUsage>(row.usage);
   return {
@@ -414,6 +419,7 @@ function rowToMessage(row: Record<string, unknown>): StoredMessage {
     createdAt: msToIso(row.created_at),
     ...(toolCalls !== undefined ? { toolCalls } : {}),
     ...(toolResults !== undefined ? { toolResults } : {}),
+    ...(attachments !== undefined ? { attachments } : {}),
     ...(followUps !== undefined ? { followUps } : {}),
     ...(usage !== undefined ? { usage } : {}),
   };

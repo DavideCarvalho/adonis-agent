@@ -2,7 +2,9 @@ import type { StandardJSONSchemaV1, StandardSchemaV1 } from '@standard-schema/sp
 import {
   type AssistantContent,
   type CallSettings,
+  type FilePart,
   type FlexibleSchema,
+  type ImagePart,
   type JSONValue,
   type LanguageModel,
   type LanguageModelUsage,
@@ -19,6 +21,7 @@ import {
 } from 'ai';
 import type { ZodTypeAny } from 'zod';
 import type {
+  MessageAttachment,
   MessageUsage,
   ModelMessage,
   ModelProvider,
@@ -100,7 +103,12 @@ function mapMessages(messages: ModelMessage[]): SdkModelMessage[] {
       continue;
     }
     if (message.role === 'user') {
-      out.push({ role: 'user', content: message.content });
+      const attachments = message.attachments ?? [];
+      out.push(
+        attachments.length === 0
+          ? { role: 'user', content: message.content }
+          : { role: 'user', content: userContentWithAttachments(message.content, attachments) },
+      );
       continue;
     }
 
@@ -143,6 +151,35 @@ function mapMessages(messages: ModelMessage[]): SdkModelMessage[] {
 
 /** `Array<TextPart | ToolCallPart>` is a valid `AssistantContent`; name the widening explicitly. */
 function assistantContent(parts: Array<TextPart | ToolCallPart>): AssistantContent {
+  return parts;
+}
+
+/**
+ * Build a multimodal user content array: the text (when non-empty) followed by one part per
+ * attachment — `image/*` → an image part, everything else → a file part (Bedrock Claude reads a PDF
+ * this way). The attachment's `url` is passed straight through as the part's source; making it
+ * reachable by the provider is the consumer's concern (the staging SPI's job), not the adapter's.
+ */
+function userContentWithAttachments(
+  text: string,
+  attachments: MessageAttachment[],
+): Array<TextPart | ImagePart | FilePart> {
+  const parts: Array<TextPart | ImagePart | FilePart> = [];
+  if (text.length > 0) {
+    parts.push({ type: 'text', text });
+  }
+  for (const attachment of attachments) {
+    parts.push(
+      attachment.contentType.startsWith('image/')
+        ? { type: 'image', image: new URL(attachment.url), mediaType: attachment.contentType }
+        : {
+            type: 'file',
+            data: new URL(attachment.url),
+            mediaType: attachment.contentType,
+            filename: attachment.name,
+          },
+    );
+  }
   return parts;
 }
 

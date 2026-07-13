@@ -10,9 +10,11 @@ import {
   type AgentRunner,
   AgentService,
   type AgentStore,
+  type AttachmentStagingStore,
   DefaultToolAuthorizer,
   InProcessTokenStreamSink,
   InlineAgentRunner,
+  type MessageAttachment,
   type ModelProvider,
   type PageContext,
   type QuotaStore,
@@ -34,7 +36,23 @@ interface ChatBody {
   agent?: string;
   persona?: string;
   pageContext?: PageContext;
+  /** Already-staged attachments (from `POST /agent/attachments`) to send with this message. */
+  attachments?: MessageAttachment[];
 }
+
+/** Default per-file size cap when `attachmentMaxBytes` is omitted (20 MiB). */
+const DEFAULT_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+
+/** Default allowlist: what multimodal model providers commonly accept as native image/file parts. */
+const DEFAULT_ALLOWED_ATTACHMENT_CONTENT_TYPES: readonly string[] = [
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'application/pdf',
+  'text/plain',
+  'text/csv',
+];
 
 /**
  * Wires `@adonis-agora/agent` into the AdonisJS application from `config/agent.ts`:
@@ -44,7 +62,8 @@ interface ChatBody {
  *   readdir fallback), registers config-level functional tools and synthesizes `agent`-kind delegate
  *   tools for `delegatesTo` edges, builds the runtime graph (store/sink/quota/authorizer/actor-resolver
  *   → deps factory → the inline runner → the `AgentService` facade), and mounts the eleven `/agent`
- *   routes under `config.path`.
+ *   routes under `config.path` — plus an optional twelfth `POST /agent/attachments` upload route when
+ *   `attachmentStaging` is configured.
  *
  * The selected store (`lucid`/`memory`) is built lazily from the config so its peer (`@adonisjs/lucid`)
  * loads only when chosen. Agent lifecycle events are emitted structurally by core onto the
@@ -99,6 +118,7 @@ export default class AgentProvider {
     const quota = await this.#resolveQuota(config, store);
     const pricingStore = await this.#resolvePricing(config);
     const retriever = await this.#resolveRetriever(config);
+    const attachmentStaging = await this.#resolveAttachmentStaging(config);
     const authorizer = this.#resolveAuthorizer(config, defaultRoles);
     const actorResolver = config.actorResolver ?? new UnconfiguredActorResolver();
     this.#store = store;
@@ -126,7 +146,7 @@ export default class AgentProvider {
     const service = new AgentService(runner, store, factory);
     this.app.container.bindValue(AgentService, service);
 
-    await this.#registerRoutes(config, service, actorResolver);
+    await this.#registerRoutes(config, service, actorResolver, attachmentStaging);
   }
 
   async shutdown() {
@@ -178,6 +198,18 @@ export default class AgentProvider {
     const retriever = config.retriever;
     if (retriever === undefined) return undefined;
     return typeof retriever === 'function' ? retriever({ app: this.app }) : retriever;
+  }
+
+  /**
+   * Build the attachment-staging store from config (an `AttachmentStagingFactory` thunk or a ready
+   * instance). `undefined` → no upload route is mounted (a client sends already-staged references).
+   */
+  async #resolveAttachmentStaging(
+    config: AgentConfig,
+  ): Promise<AttachmentStagingStore | undefined> {
+    const staging = config.attachmentStaging;
+    if (staging === undefined) return undefined;
+    return typeof staging === 'function' ? staging({ app: this.app }) : staging;
   }
 
   #resolveAuthorizer(config: AgentConfig, defaultRoles: string[]): RolesPolicy {
@@ -235,6 +267,7 @@ export default class AgentProvider {
     config: AgentConfig,
     service: AgentService,
     actorResolver: ActorResolver,
+    attachmentStaging: AttachmentStagingStore | undefined,
   ): Promise<void> {
     const router = await this.app.container.make('router');
     const path = (config.path ?? 'agent').replace(/^\/+|\/+$/g, '');
@@ -252,6 +285,7 @@ export default class AgentProvider {
         ...(body.agent !== undefined ? { agentName: body.agent } : {}),
         ...(body.persona !== undefined ? { personaId: body.persona } : {}),
         ...(body.pageContext !== undefined ? { pageContext: body.pageContext } : {}),
+        ...(body.attachments !== undefined ? { attachments: body.attachments } : {}),
       });
       await this.#pipe(ctx, service, runId, threadId);
     });
@@ -321,6 +355,49 @@ export default class AgentProvider {
       if (actor === null) return;
       return ctx.response.json(await service.quotaToday(actor.id));
     });
+
+    // 12. POST /agent/attachments — OPTIONAL. Mounted only when `attachmentStaging` is configured, so
+    // an app without it never exposes an upload surface. Buffers the multipart `file` field, validates
+    // it against the size cap + content-type allowlist, then stages it into a model-fetchable
+    // MessageAttachment the client sends back on its next `chat` call. Mirrors the SSE routes' envelope
+    // (JSON body, actor resolved via the shared resolver, precise HTTP status on rejection).
+    if (attachmentStaging !== undefined) {
+      const staging = attachmentStaging;
+      const maxBytes = config.attachmentMaxBytes ?? DEFAULT_MAX_ATTACHMENT_BYTES;
+      const allowedContentTypes =
+        config.attachmentAllowedContentTypes ?? DEFAULT_ALLOWED_ATTACHMENT_CONTENT_TYPES;
+      router.post(p('attachments'), async (ctx: HttpContext) => {
+        const actor = await this.#resolveActor(ctx, actorResolver);
+        if (actor === null) return;
+        const file = ctx.request.file('file');
+        if (file === null || file.tmpPath === undefined) {
+          return ctx.response.status(400).json({ error: 'multipart field "file" is required' });
+        }
+        const contentType =
+          file.headers?.['content-type']?.split(';')[0]?.trim() ?? `${file.type}/${file.subtype}`;
+        if (!allowedContentTypes.includes(contentType)) {
+          return ctx.response.status(415).json({
+            error: `content type "${contentType}" is not allowed (allowed: ${allowedContentTypes.join(', ')})`,
+          });
+        }
+        const sizeBytes = file.size;
+        if (sizeBytes > maxBytes) {
+          return ctx.response
+            .status(413)
+            .json({ error: `file exceeds the ${maxBytes}-byte limit` });
+        }
+        const { readFile } = await import('node:fs/promises');
+        const data = await readFile(file.tmpPath);
+        const attachment = await staging.stage({
+          data,
+          filename: file.clientName,
+          contentType,
+          sizeBytes,
+          actor,
+        });
+        return ctx.response.json(attachment);
+      });
+    }
   }
 
   /** Resolve the actor; on failure reply 401 and return `null` so the handler short-circuits. */

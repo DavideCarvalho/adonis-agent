@@ -48,6 +48,7 @@ export function createTableStatements(): string[] {
       "content" TEXT NOT NULL,
       "tool_calls" TEXT NULL,
       "tool_results" TEXT NULL,
+      "attachments" TEXT NULL,
       "follow_ups" TEXT NULL,
       "usage" TEXT NULL,
       "persona" VARCHAR(255) NULL,

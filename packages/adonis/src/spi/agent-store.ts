@@ -1,5 +1,6 @@
 import type {
   Actor,
+  MessageAttachment,
   MessageUsage,
   StoredMessage,
   ThreadDetail,
@@ -24,6 +25,8 @@ export interface AppendMessageInput {
   persona?: string;
   toolCalls?: ToolCallRequest[];
   toolResults?: ToolResult[];
+  /** Files the user attached to this message (image/PDF); persisted with it and replayed to the model. */
+  attachments?: MessageAttachment[];
   followUps?: string[];
   usage?: MessageUsage;
 }

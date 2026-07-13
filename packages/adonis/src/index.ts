@@ -10,6 +10,7 @@ export * from './spi/quota-store.js';
 export * from './spi/pricing-store.js';
 export * from './spi/agent-runner.js';
 export * from './spi/actor-resolver.js';
+export * from './spi/attachment-staging.js';
 export * from './spi/governance-queries.js';
 export * from './spi/embedding-provider.js';
 export * from './spi/retriever.js';
@@ -33,7 +34,14 @@ export {
 export * from './diagnostics.js';
 
 // ── Wave 2: Adonis integration shell ─────────────────────────────────────────
-export { defineConfig, stores, quotas, pricingStores, retrievers } from './define_config.js';
+export {
+  defineConfig,
+  stores,
+  quotas,
+  pricingStores,
+  retrievers,
+  attachmentStores,
+} from './define_config.js';
 export type {
   AgentConfig,
   DefaultAgentOptions,
@@ -49,6 +57,8 @@ export type {
   RetrieverFactory,
   MemoryRetrieverConfig,
   EmbeddingFactory,
+  AttachmentStagingContext,
+  AttachmentStagingFactory,
   StoreContext,
   StoreFactory,
   LucidStoreConfig,

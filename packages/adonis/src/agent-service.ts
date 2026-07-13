@@ -5,6 +5,7 @@ import type { AgentStore } from './spi/agent-store.js';
 import type {
   Actor,
   AgentRunInput,
+  MessageAttachment,
   PageContext,
   Persona,
   ThreadDetail,
@@ -18,6 +19,12 @@ export interface ChatParams {
   agentName?: string;
   personaId?: string;
   pageContext?: PageContext;
+  /**
+   * Already-staged attachments (image/PDF) for this message — each an `{ mediaId, url, contentType,
+   * name }` produced by the `POST /agent/attachments` upload route (or the host's own staging). The
+   * lib never fetches bytes; the model adapter renders them as native content parts from `url`.
+   */
+  attachments?: MessageAttachment[];
 }
 
 /**
@@ -52,6 +59,7 @@ export class AgentService {
       agentName,
       ...(persona !== undefined ? { persona } : {}),
       ...(params.pageContext !== undefined ? { pageContext: params.pageContext } : {}),
+      ...(params.attachments !== undefined ? { attachments: params.attachments } : {}),
     };
 
     const { runId } = await this.runner.start(input);

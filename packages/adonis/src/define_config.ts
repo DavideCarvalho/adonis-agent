@@ -1,13 +1,16 @@
 import type { BrandedFunctionalTool } from './ai-tool-ref.js';
 import type { ActorResolver } from './spi/actor-resolver.js';
+import type { AttachmentStagingStore } from './spi/attachment-staging.js';
 import type { ModelProvider } from './spi/model-provider.js';
 import type { AgentPricingStore } from './spi/pricing-store.js';
 import type { QuotaStore } from './spi/quota-store.js';
 import type { Retriever } from './spi/retriever.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { TokenStreamSink } from './spi/token-stream-sink.js';
-import { pricingStores, quotas, retrievers, stores } from './stores/factory.js';
+import { attachmentStores, pricingStores, quotas, retrievers, stores } from './stores/factory.js';
 import type {
+  AttachmentStagingContext,
+  AttachmentStagingFactory,
   EmbeddingFactory,
   LucidPricingConfig,
   LucidStoreConfig,
@@ -83,6 +86,19 @@ export interface AgentConfig {
   /** How many passages inject-mode retrieval requests per run. Default 5. */
   retrievalTopK?: number;
   /**
+   * Upload-side seam for message attachments (image/PDF). When set, the provider mounts the optional
+   * `POST /agent/attachments` route, which stages an uploaded file through this store and returns a
+   * {@link import('./spi/attachment-staging.js').MessageAttachment} the client sends with the next
+   * chat message. Pass a store instance, or a lazy `attachmentStores.*()` factory
+   * (`attachmentStores.memory()` encodes bytes into a `data:` URL for tests/dev). Omit → no upload
+   * route; a client sends already-staged attachment references directly on `chat`.
+   */
+  attachmentStaging?: AttachmentStagingStore | AttachmentStagingFactory;
+  /** Per-file byte cap the upload route enforces. Default 20 MiB. */
+  attachmentMaxBytes?: number;
+  /** Allowed upload content types. Default: common image types + `application/pdf` + `text/*`. */
+  attachmentAllowedContentTypes?: string[];
+  /**
    * Tool authorization gate. Defaults to `DefaultToolAuthorizer` (fail-closed, ADMIN-only; role-set
    * intersection). `authorizer` and `rolesPolicy` are aliases — pass either.
    */
@@ -124,7 +140,7 @@ export function defineConfig(config: AgentConfig): AgentConfig {
   return config;
 }
 
-export { stores, quotas, pricingStores, retrievers };
+export { stores, quotas, pricingStores, retrievers, attachmentStores };
 export type {
   StoreContext,
   StoreFactory,
@@ -140,4 +156,6 @@ export type {
   RetrieverFactory,
   MemoryRetrieverConfig,
   EmbeddingFactory,
+  AttachmentStagingContext,
+  AttachmentStagingFactory,
 };

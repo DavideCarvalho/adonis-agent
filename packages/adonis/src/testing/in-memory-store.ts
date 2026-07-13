@@ -185,6 +185,7 @@ export class InMemoryAgentStore implements AgentStore {
       createdAt: this.now(),
       ...(input.toolCalls !== undefined ? { toolCalls: input.toolCalls } : {}),
       ...(input.toolResults !== undefined ? { toolResults: input.toolResults } : {}),
+      ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
       ...(input.followUps !== undefined ? { followUps: input.followUps } : {}),
       ...(input.usage !== undefined ? { usage: input.usage } : {}),
     };

@@ -41,6 +41,7 @@ export default class extends BaseSchema {
       table.text('content').notNullable()
       table.text('tool_calls')
       table.text('tool_results')
+      table.text('attachments')
       table.text('follow_ups')
       table.text('usage')
       table.string('persona')

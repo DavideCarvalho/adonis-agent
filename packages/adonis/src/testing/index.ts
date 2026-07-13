@@ -22,3 +22,7 @@ export {
   FakeReranker,
   inMemoryRetriever,
 } from './fake-embedding-provider.js';
+export {
+  InMemoryAttachmentStagingStore,
+  type StagedRecord,
+} from './in-memory-attachment-staging.js';

@@ -194,12 +194,16 @@ export async function runAgentLoop(
     }
   }
 
+  // Attachments arrive already staged (the upload route + AttachmentStagingStore turned bytes into a
+  // model-fetchable url), so persisting them here is a plain field write — no IO to wrap in a step.
+  // The multimodal content parts are built by the model adapter at turn time from the url.
   await hooks.step('persist:user', () =>
     deps.store.appendMessage({
       threadId: input.threadId,
       role: 'user',
       content: input.userText,
       ...(persona !== undefined ? { persona: persona.id } : {}),
+      ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
     }),
   );
 
@@ -209,6 +213,7 @@ export async function runAgentLoop(
     content: message.content,
     ...(message.toolCalls !== undefined ? { toolCalls: message.toolCalls } : {}),
     ...(message.toolResults !== undefined ? { toolResults: message.toolResults } : {}),
+    ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
   }));
 
   const writer = await hooks.openSink();
