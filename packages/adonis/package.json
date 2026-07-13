@@ -63,6 +63,11 @@
       "import": "./dist/src/data/index.js",
       "default": "./dist/src/data/index.js"
     },
+    "./rag-media": {
+      "types": "./dist/src/rag-media/index.d.ts",
+      "import": "./dist/src/rag-media/index.js",
+      "default": "./dist/src/rag-media/index.js"
+    },
     "./hooks/tools": {
       "types": "./dist/src/hooks/tools.d.ts",
       "import": "./dist/src/hooks/tools.js",

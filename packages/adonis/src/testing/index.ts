@@ -29,3 +29,8 @@ export {
   InMemoryAttachmentStagingStore,
   type StagedRecord,
 } from './in-memory-attachment-staging.js';
+export {
+  FakeMediaManager,
+  fakePdfExtractor,
+  inMemoryMediaRagIngestion,
+} from './fake-media.js';
