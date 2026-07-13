@@ -29,6 +29,8 @@ export interface AppendMessageInput {
   attachments?: MessageAttachment[];
   followUps?: string[];
   usage?: MessageUsage;
+  /** The run (turn) this message belongs to, for run-detail assembly + trace deep-links. */
+  runId?: string;
 }
 
 export interface RecordToolCallInput {
@@ -38,6 +40,8 @@ export interface RecordToolCallInput {
   toolType: 'read' | 'action';
   input: unknown;
   status: ToolCallStatus;
+  /** The run (turn) this tool call belongs to, for run-detail assembly + trace deep-links. */
+  runId?: string;
 }
 
 export interface UpdateToolCallInput {
@@ -58,6 +62,41 @@ export interface RecordUsageInput {
   usage: MessageUsage;
   /** Provider-reported actual USD cost for this turn, when known (gateways report it). */
   costUsd?: number;
+  /** The run (turn) this usage row belongs to, for run-detail assembly + trace deep-links. */
+  runId?: string;
+}
+
+/** A run's lifecycle status: created `running`, then settled once (terminal). */
+export type AgentRunStatus = 'running' | 'completed' | 'failed' | 'cancelled';
+
+/** Opens a run (turn) row at start — status `running`, `started_at` stamped by the store. */
+export interface RecordRunStartInput {
+  runId: string;
+  threadId: string;
+  /** Acting identity; the store persists `actor.id` as `actor_ref` and `actor.tenantRef` as `tenant_ref`. */
+  actor: Actor;
+  /** The agent that handled the run; `null`/omitted for the default agent. */
+  agentName?: string;
+  /** True when the run executes as a replay-safe durable workflow, false for the inline runner. */
+  durable?: boolean;
+}
+
+/**
+ * Settles a run's outcome (terminal). A store MUST apply this only while the run is still `running`
+ * (first terminal wins) so a late `completed` from the loop can never overwrite a `failed`/`cancelled`
+ * already recorded by the runner. `error` is set only for `failed`. Token/step/cost totals are the
+ * loop's run-level rollup on `completed`; a runner-recorded failure/cancel may omit them.
+ */
+export interface RecordRunEndInput {
+  runId: string;
+  status: Exclude<AgentRunStatus, 'running'>;
+  /** Epoch-ms finish time; defaults to now inside the store when omitted. */
+  finishedAt?: number;
+  stepCount?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
+  error?: string;
 }
 
 /** ORM-agnostic persistence. Refs are string ids; adapters may add real relations. */
@@ -78,4 +117,9 @@ export interface AgentStore {
 
   recordUsage(input: RecordUsageInput): Promise<void>;
   quotaToday(actorRef: string, day: string): Promise<{ usedTokens: number }>;
+
+  /** Open a run (turn) row at start. Replay-safe: the loop calls it under a durable step. */
+  recordRunStart(input: RecordRunStartInput): Promise<void>;
+  /** Settle a run's outcome (terminal, first-wins). A no-op when the run is unknown or already settled. */
+  recordRunEnd(input: RecordRunEndInput): Promise<void>;
 }

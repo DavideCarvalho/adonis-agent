@@ -2,6 +2,8 @@ import type {
   AgentStore,
   AppendMessageInput,
   CreateThreadInput,
+  RecordRunEndInput,
+  RecordRunStartInput,
   RecordToolCallInput,
   RecordUsageInput,
   UpdateToolCallInput,
@@ -30,6 +32,7 @@ export interface LucidQueryBuilderLike {
   whereNull(column: string): this;
   orderBy(column: string, direction: 'asc' | 'desc'): this;
   limit(value: number): this;
+  offset(value: number): this;
   first(): Promise<Record<string, unknown> | null>;
   select(...columns: string[]): Promise<Record<string, unknown>[]>;
   update(row: Record<string, unknown>): Promise<unknown>;
@@ -285,6 +288,7 @@ export class LucidAgentStore implements AgentStore {
       follow_ups: safeJson(input.followUps),
       usage: safeJson(input.usage),
       persona: input.persona ?? null,
+      run_id: input.runId ?? null,
       created_at: now,
     });
     // Keep the thread's `updated_at` in step so list ordering reflects the latest activity.
@@ -338,6 +342,7 @@ export class LucidAgentStore implements AgentStore {
       executed_by_ref: null,
       execution_ms: null,
       error: null,
+      run_id: input.runId ?? null,
       created_at: Date.now(),
       executed_at: null,
     });
@@ -368,8 +373,49 @@ export class LucidAgentStore implements AgentStore {
       cache_write_tokens: input.usage.cacheWriteTokens ?? null,
       cache_read_tokens: input.usage.cacheReadTokens ?? null,
       cost_usd: input.costUsd ?? null,
+      run_id: input.runId ?? null,
       created_at: Date.now(),
     });
+  }
+
+  async recordRunStart(input: RecordRunStartInput): Promise<void> {
+    await this.init();
+    await this.db.table(AGENT_TABLES.runs).insert({
+      id: input.runId,
+      thread_id: input.threadId,
+      agent_name: input.agentName ?? null,
+      actor_ref: input.actor.id,
+      tenant_ref: input.actor.tenantRef ?? null,
+      status: 'running',
+      started_at: Date.now(),
+      finished_at: null,
+      step_count: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      cost_usd: null,
+      error: null,
+      durable: input.durable ? 1 : 0,
+    });
+  }
+
+  async recordRunEnd(input: RecordRunEndInput): Promise<void> {
+    await this.init();
+    const patch: Record<string, unknown> = {
+      status: input.status,
+      finished_at: input.finishedAt ?? Date.now(),
+    };
+    if (input.stepCount !== undefined) patch.step_count = input.stepCount;
+    if (input.inputTokens !== undefined) patch.input_tokens = input.inputTokens;
+    if (input.outputTokens !== undefined) patch.output_tokens = input.outputTokens;
+    if (input.costUsd !== undefined) patch.cost_usd = input.costUsd;
+    if (input.error !== undefined) patch.error = input.error;
+    // First terminal wins: only settle a run still `running`, so a late `completed` from the loop can
+    // never overwrite a `failed`/`cancelled` the runner already recorded (idempotent under replay too).
+    await this.db
+      .from(AGENT_TABLES.runs)
+      .where('id', input.runId)
+      .where('status', 'running')
+      .update(patch);
   }
 
   async quotaToday(actorRef: string, day: string): Promise<{ usedTokens: number }> {

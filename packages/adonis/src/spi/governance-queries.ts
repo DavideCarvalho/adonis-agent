@@ -62,6 +62,156 @@ export interface ThreadActivityRow {
   lastActivityAt: string;
 }
 
+// ── Run lifecycle read-model ─────────────────────────────────────────────────
+
+/** A run's lifecycle status as the read-model surfaces it. */
+export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled';
+
+/** Filters + cursor for {@link AgentGovernanceQueries.listRuns}. All optional; absent = no constraint. */
+export interface ListRunsFilter {
+  /** Exact `actor_ref`. */
+  actor?: string;
+  /** Exact `agent_name`. */
+  agent?: string;
+  status?: RunStatus;
+  /** Inclusive UTC-day lower bound on `started_at`, `YYYY-MM-DD`. */
+  from?: string;
+  /** Inclusive UTC-day upper bound on `started_at`, `YYYY-MM-DD`. */
+  to?: string;
+  /** Opaque cursor from a prior page's {@link ListRunsResult.nextCursor}; omit for the first page. */
+  cursor?: string;
+  /** Page size; defaults to 50, clamped to 200 by the adapter. */
+  limit?: number;
+}
+
+/** A run row for the governance list + detail. Newest-first in {@link ListRunsResult}. */
+export interface RunSummaryRow {
+  runId: string;
+  threadId: string;
+  actorRef: string;
+  tenantRef: string | null;
+  agentName: string | null;
+  status: string;
+  /** ISO timestamp. */
+  startedAt: string;
+  /** ISO timestamp, `null` while still running. */
+  finishedAt: string | null;
+  /** `finishedAt - startedAt` in ms, `null` while still running. */
+  durationMs: number | null;
+  stepCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number | null;
+  error: string | null;
+  durable: boolean;
+}
+
+/** One page of {@link AgentGovernanceQueries.listRuns}, newest-first, with an opaque forward cursor. */
+export interface ListRunsResult {
+  runs: RunSummaryRow[];
+  /** Pass back as {@link ListRunsFilter.cursor} for the next page; `null` when the last page was returned. */
+  nextCursor: string | null;
+}
+
+/** A message belonging to a run, for {@link RunDetail}. */
+export interface RunMessageRow {
+  id: string;
+  role: string;
+  content: string;
+  createdAt: string;
+}
+
+/** A tool call belonging to a run, for {@link RunDetail} (and the approvals subset). */
+export interface RunToolCallRow {
+  toolCallId: string;
+  toolName: string;
+  toolType: string;
+  status: string;
+  input: unknown;
+  output: unknown;
+  error: string | null;
+  executionMs: number | null;
+  createdAt: string;
+}
+
+/** A usage ledger row belonging to a run, for {@link RunDetail}. */
+export interface RunUsageRow {
+  modelId: string;
+  purpose: string;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number | null;
+  createdAt: string;
+}
+
+/** The full trace of one run: the run row plus its messages, tool calls, pending approvals and usage. */
+export interface RunDetail {
+  run: RunSummaryRow;
+  messages: RunMessageRow[];
+  toolCalls: RunToolCallRow[];
+  /** The subset of `toolCalls` still `pending_approval`. */
+  approvals: RunToolCallRow[];
+  usage: RunUsageRow[];
+}
+
+/** Filters for {@link AgentGovernanceQueries.pendingApprovals}. */
+export interface PendingApprovalsFilter {
+  /** Restrict to a single acting ref (the owning run's `actor_ref`). */
+  actor?: string;
+  /** Cap the inbox; defaults to 50, clamped to 200 by the adapter. */
+  limit?: number;
+}
+
+/** One tool call awaiting a HITL decision, for the cross-thread approvals inbox (oldest first). */
+export interface PendingApprovalRow {
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+  threadId: string;
+  /** The run this call belongs to, for a trace deep-link; `null` for a call recorded before run tracking. */
+  runId: string | null;
+  /** Who asked — the owning run's (or thread's) actor. */
+  actorRef: string;
+  /** ISO timestamp the call was recorded (requested). */
+  requestedAt: string;
+}
+
+/** Inclusive UTC-day range for the run/tool aggregates; each bound `YYYY-MM-DD`, both optional. */
+export interface ToolStatsRange {
+  /** Lower bound on the row's `created_at`/`started_at`; omit for no lower bound. */
+  from?: string;
+  /** Upper bound; omit for no upper bound. */
+  to?: string;
+}
+
+/** Per-tool call/failure/rejection/latency rollup over a range, highest call count first. */
+export interface PerToolStatRow {
+  toolName: string;
+  toolType: string;
+  calls: number;
+  failed: number;
+  rejected: number;
+  /** Mean `executionMs` across calls that recorded one; `null` when none did. */
+  avgDurationMs: number | null;
+}
+
+/** Aggregated run reliability over a range — success / failure / cancel rates. */
+export interface RunReliability {
+  runs: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
+  running: number;
+  /** completed / runs, 0 when runs = 0. */
+  successRate: number;
+  /** failed / runs, 0 when runs = 0. */
+  failureRate: number;
+  /** cancelled / runs, 0 when runs = 0. */
+  cancelRate: number;
+  /** Mean duration of settled (completed/failed/cancelled) runs in ms; `null` when none settled. */
+  avgDurationMs: number | null;
+}
+
 /**
  * The governance read-model. Cost is `inputTokens/1e6 * inputPricePer1m + outputTokens/1e6 *
  * outputPricePer1m` against the current pricing row per model; an unpriced model contributes 0 cost
@@ -73,4 +223,17 @@ export interface AgentGovernanceQueries {
   usageTrend(range: GovernanceRange): Promise<UsageTrendPoint[]>;
   recentToolCalls(limit: number): Promise<ToolCallActivityRow[]>;
   recentThreads(limit: number): Promise<ThreadActivityRow[]>;
+
+  // ── Run lifecycle governance. An adapter backed by a store without run recording returns an empty
+  // page / null / zeros from these.
+  /** Filterable, cursor-paginated run list, newest-first. */
+  listRuns(filter?: ListRunsFilter): Promise<ListRunsResult>;
+  /** The full trace of one run (run + messages + tool calls + approvals + usage), or `null` if unknown. */
+  runDetail(runId: string): Promise<RunDetail | null>;
+  /** Tool calls sitting `pending_approval`, oldest first (an inbox drains from the back). */
+  pendingApprovals(filter?: PendingApprovalsFilter): Promise<PendingApprovalRow[]>;
+  /** Per-tool call/failure/rejection/latency rollup over the range, highest call count first. */
+  perToolStats(range?: ToolStatsRange): Promise<PerToolStatRow[]>;
+  /** Success/failure/cancel rates + mean settled duration over the range. */
+  runReliability(range?: ToolStatsRange): Promise<RunReliability>;
 }

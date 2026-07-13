@@ -276,7 +276,7 @@ export default class AgentProvider {
       );
       setDurableAgentContext({ factory, store });
       registerAgentWorkflow(engine);
-      return new DurableAgentRunner(engine);
+      return new DurableAgentRunner(engine, store);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(
@@ -493,6 +493,75 @@ export default class AgentProvider {
         const actor = await this.#resolveActor(ctx, actorResolver);
         if (actor === null) return;
         return ctx.response.json(await gov.recentThreads(limitOf(ctx)));
+      });
+
+      // ── Run lifecycle governance (the run tracking read-model). Same read-only + authenticated
+      // envelope; the runs are cross-actor governance data.
+      const optionalRange = (ctx: HttpContext) => {
+        const from = ctx.request.input('from');
+        const to = ctx.request.input('to');
+        return {
+          ...(from !== undefined ? { from: String(from) } : {}),
+          ...(to !== undefined ? { to: String(to) } : {}),
+        };
+      };
+
+      // GET /agent/governance/runs — filterable, cursor-paginated run list, newest-first.
+      // Query: actor?, agent?, status?, from?, to?, cursor?, limit?
+      router.get(g('runs'), async (ctx: HttpContext) => {
+        const actor = await this.#resolveActor(ctx, actorResolver);
+        if (actor === null) return;
+        const filterActor = ctx.request.input('actor');
+        const agent = ctx.request.input('agent');
+        const status = ctx.request.input('status');
+        const cursor = ctx.request.input('cursor');
+        const { from, to } = optionalRange(ctx);
+        return ctx.response.json(
+          await gov.listRuns({
+            limit: limitOf(ctx),
+            ...(filterActor !== undefined ? { actor: String(filterActor) } : {}),
+            ...(agent !== undefined ? { agent: String(agent) } : {}),
+            ...(status !== undefined ? { status: String(status) as never } : {}),
+            ...(cursor !== undefined ? { cursor: String(cursor) } : {}),
+            ...(from !== undefined ? { from } : {}),
+            ...(to !== undefined ? { to } : {}),
+          }),
+        );
+      });
+
+      // GET /agent/governance/runs/:id — one run's full trace (run + messages + tool calls +
+      // approvals + usage), or null.
+      router.get(g('runs/:id'), async (ctx: HttpContext) => {
+        const actor = await this.#resolveActor(ctx, actorResolver);
+        if (actor === null) return;
+        return ctx.response.json(await gov.runDetail(String(ctx.params.id)));
+      });
+
+      // GET /agent/governance/approvals/pending — cross-thread HITL approvals inbox, oldest first.
+      router.get(g('approvals/pending'), async (ctx: HttpContext) => {
+        const actor = await this.#resolveActor(ctx, actorResolver);
+        if (actor === null) return;
+        const filterActor = ctx.request.input('actor');
+        return ctx.response.json(
+          await gov.pendingApprovals({
+            limit: limitOf(ctx),
+            ...(filterActor !== undefined ? { actor: String(filterActor) } : {}),
+          }),
+        );
+      });
+
+      // GET /agent/governance/tools/stats — per-tool call/failure/rejection/latency rollup.
+      router.get(g('tools/stats'), async (ctx: HttpContext) => {
+        const actor = await this.#resolveActor(ctx, actorResolver);
+        if (actor === null) return;
+        return ctx.response.json(await gov.perToolStats(optionalRange(ctx)));
+      });
+
+      // GET /agent/governance/reliability — success/failure/cancel rates + mean settled duration.
+      router.get(g('reliability'), async (ctx: HttpContext) => {
+        const actor = await this.#resolveActor(ctx, actorResolver);
+        if (actor === null) return;
+        return ctx.response.json(await gov.runReliability(optionalRange(ctx)));
       });
     }
   }

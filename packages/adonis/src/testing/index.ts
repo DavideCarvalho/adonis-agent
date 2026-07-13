@@ -9,6 +9,8 @@ export {
   type GovernanceUsageRow,
   type GovernanceToolCallRow,
   type GovernanceThreadRow,
+  type GovernanceRunRow,
+  type GovernanceMessageRow,
 } from './in-memory-store.js';
 export {
   InMemoryGovernanceQueries,

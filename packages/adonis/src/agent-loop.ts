@@ -105,6 +105,11 @@ function intersectAllow(a?: string[], b?: string[]): string[] | undefined {
 
 export interface AgentLoopHooks {
   runId: string;
+  /**
+   * True when this run executes as a replay-safe durable workflow, false/undefined for the inline
+   * runner. Recorded on the `agent_run` row so governance can tell durable runs apart.
+   */
+  durable?: boolean;
   /** A writer for this run's live token stream (data plane). */
   openSink(): SinkWriter | Promise<SinkWriter>;
   /** HITL gate for an action tool. Inline resolves a pending promise; durable awaits a signal. */
@@ -204,6 +209,19 @@ export async function runAgentLoop(
   const persona = input.persona;
   let system = await resolveSystemPrompt(deps, input);
 
+  // Open the run (turn) row FIRST — before the quota gate — so even a quota-rejected run is tracked
+  // (the runner settles it `failed`). A checkpointed step so a durable replay reuses the ONE row (no
+  // duplicate on resume); `run_id` is then stamped onto every message / tool call / usage row below.
+  await hooks.step('persist:run:start', () =>
+    deps.store.recordRunStart({
+      runId: hooks.runId,
+      threadId: input.threadId,
+      actor: input.actor,
+      durable: hooks.durable ?? false,
+      ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+    }),
+  );
+
   if (deps.quota !== undefined) {
     const quota = deps.quota;
     const state = await hooks.step('quota:check', () => quota.check(input.actor.id, deps.day));
@@ -220,6 +238,7 @@ export async function runAgentLoop(
       threadId: input.threadId,
       role: 'user',
       content: input.userText,
+      runId: hooks.runId,
       ...(persona !== undefined ? { persona: persona.id } : {}),
       ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
     }),
@@ -239,6 +258,10 @@ export async function runAgentLoop(
   let steps = 0;
   let totalInput = 0;
   let totalOutput = 0;
+  // Run-level cost rollup: sum only the steps whose cost we actually know (provider-reported or
+  // priced). If NO step had a cost, the run's `cost_usd` stays `null` — never a fabricated `0`.
+  let totalCost = 0;
+  let hasCost = false;
 
   publishAgentRunStarted({
     runId: hooks.runId,
@@ -297,6 +320,7 @@ export async function runAgentLoop(
       deps.store.recordUsage({
         threadId: input.threadId,
         actorRef: input.actor.id,
+        runId: hooks.runId,
         modelId: resolvedModelId,
         purpose: 'chat',
         usage: turn.usage,
@@ -304,6 +328,10 @@ export async function runAgentLoop(
         ...(turn.costUsd !== undefined ? { costUsd: turn.costUsd } : {}),
       }),
     );
+    if (costUsd !== null) {
+      totalCost += costUsd;
+      hasCost = true;
+    }
     if (deps.quota !== undefined) {
       const quota = deps.quota;
       await hooks.step(`quota:bump:${i}`, () =>
@@ -326,6 +354,7 @@ export async function runAgentLoop(
         threadId: input.threadId,
         role: 'assistant',
         content: turn.text,
+        runId: hooks.runId,
         usage: { ...turn.usage, costUsd },
         ...(persona !== undefined ? { persona: persona.id } : {}),
         ...(turn.toolCalls.length > 0 ? { toolCalls: turn.toolCalls } : {}),
@@ -351,6 +380,7 @@ export async function runAgentLoop(
           toolType: 'read',
           input: { query: input.userText },
           status: 'auto_executed',
+          runId: hooks.runId,
         });
         await deps.store.updateToolCall({ toolCallId, status: 'executed', output: { passages } });
       });
@@ -387,6 +417,7 @@ export async function runAgentLoop(
             toolType: 'read',
             input: call.input,
             status: 'auto_executed',
+            runId: hooks.runId,
           }),
         );
         publishAgentDelegated({
@@ -413,6 +444,7 @@ export async function runAgentLoop(
             toolType: 'action',
             input: call.input,
             status: 'pending_approval',
+            runId: hooks.runId,
           }),
         );
         const decision = await hooks.awaitApproval(call, ctx);
@@ -447,6 +479,7 @@ export async function runAgentLoop(
             toolType: 'read',
             input: call.input,
             status: 'auto_executed',
+            runId: hooks.runId,
           }),
         );
       }
@@ -515,6 +548,22 @@ export async function runAgentLoop(
       deps.store.setTitle(input.threadId, deriveTitle(input.userText)),
     );
   }
+
+  // Settle the run `completed` with its rollup. Normal completion only — the loop never records a
+  // failure (it doesn't catch its own crash; that's the runner's job). A checkpointed step so a
+  // resumed durable replay settles the ONE row exactly once, and `recordRunEnd` is first-terminal so
+  // this can never overwrite a `failed`/`cancelled` a concurrent cancel already wrote.
+  await hooks.step('persist:run:end', () =>
+    deps.store.recordRunEnd({
+      runId: hooks.runId,
+      status: 'completed',
+      finishedAt: Date.now(),
+      stepCount: steps,
+      inputTokens: totalInput,
+      outputTokens: totalOutput,
+      ...(hasCost ? { costUsd: totalCost } : {}),
+    }),
+  );
 
   await writer.end();
   publishAgentRunFinished({

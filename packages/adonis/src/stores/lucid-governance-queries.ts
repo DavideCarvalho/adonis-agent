@@ -2,9 +2,21 @@ import type {
   ActorSpendRow,
   AgentGovernanceQueries,
   GovernanceRange,
+  ListRunsFilter,
+  ListRunsResult,
   ModelSpendRow,
+  PendingApprovalRow,
+  PendingApprovalsFilter,
+  PerToolStatRow,
+  RunDetail,
+  RunMessageRow,
+  RunReliability,
+  RunSummaryRow,
+  RunToolCallRow,
+  RunUsageRow,
   ThreadActivityRow,
   ToolCallActivityRow,
+  ToolStatsRange,
   UsageTrendPoint,
 } from '../spi/governance-queries.js';
 import type { AgentPricingStore, CurrentModelPrice } from '../spi/pricing-store.js';
@@ -42,6 +54,73 @@ interface UsageRow {
   cacheWriteTokens: number | null;
   cacheReadTokens: number | null;
   costUsd: number | null;
+}
+
+/** Parse a TEXT JSON column back to a value; `undefined` for null/empty/malformed. */
+function parseJsonCol(text: unknown): unknown {
+  if (typeof text !== 'string' || text.length === 0) return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Default page size + hard cap, mirroring the governance routes' clamp. */
+function clampLimit(limit: number | undefined, fallback = 50): number {
+  const value = limit !== undefined && Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : fallback;
+  return Math.min(value, 200);
+}
+
+/** Optional inclusive UTC-day bounds → epoch-ms; each side `undefined` when unbounded. */
+function optionalDayBounds(range: ToolStatsRange | undefined): {
+  start: number | undefined;
+  end: number | undefined;
+} {
+  return {
+    start: range?.from !== undefined ? Date.parse(`${range.from}T00:00:00.000Z`) : undefined,
+    end: range?.to !== undefined ? Date.parse(`${range.to}T23:59:59.999Z`) : undefined,
+  };
+}
+
+/** Map a raw `agent_run` Lucid row to the read-model {@link RunSummaryRow}. */
+function runRowToSummary(row: Record<string, unknown>): RunSummaryRow {
+  const startedAt = toInt(row.started_at);
+  const finishedAtRaw = row.finished_at;
+  const finishedAt =
+    finishedAtRaw === null || finishedAtRaw === undefined ? null : toInt(finishedAtRaw);
+  return {
+    runId: String(row.id),
+    threadId: String(row.thread_id),
+    actorRef: String(row.actor_ref),
+    tenantRef: row.tenant_ref === null || row.tenant_ref === undefined ? null : String(row.tenant_ref),
+    agentName: row.agent_name === null || row.agent_name === undefined ? null : String(row.agent_name),
+    status: String(row.status),
+    startedAt: new Date(startedAt).toISOString(),
+    finishedAt: finishedAt === null ? null : new Date(finishedAt).toISOString(),
+    durationMs: finishedAt === null ? null : finishedAt - startedAt,
+    stepCount: toInt(row.step_count),
+    inputTokens: toInt(row.input_tokens),
+    outputTokens: toInt(row.output_tokens),
+    costUsd: toNumOrNull(row.cost_usd),
+    error: row.error === null || row.error === undefined ? null : String(row.error),
+    durable: toInt(row.durable) !== 0,
+  };
+}
+
+/** Map a raw `agent_tool_call` Lucid row to the read-model {@link RunToolCallRow}. */
+function toolCallRowToDetail(row: Record<string, unknown>): RunToolCallRow {
+  return {
+    toolCallId: String(row.id),
+    toolName: String(row.tool_name),
+    toolType: String(row.tool_type),
+    status: String(row.status),
+    input: parseJsonCol(row.input),
+    output: parseJsonCol(row.output),
+    error: row.error === null || row.error === undefined ? null : String(row.error),
+    executionMs: toNumOrNull(row.execution_ms),
+    createdAt: new Date(toInt(row.created_at)).toISOString(),
+  };
 }
 
 function rowToUsage(row: Record<string, unknown>): UsageRow {
@@ -246,5 +325,252 @@ export class LucidGovernanceQueries implements AgentGovernanceQueries {
       });
     }
     return result;
+  }
+
+  // ── Run lifecycle read-model ───────────────────────────────────────────────
+
+  /**
+   * Filterable, cursor-paginated run list, newest-first (`started_at` desc, then `id` desc for a
+   * stable tiebreak). The cursor is an opaque offset (over the SAME filter set); a page fetches
+   * `limit + 1` rows to learn whether a next page exists. A store without recorded runs yields an
+   * empty page.
+   */
+  async listRuns(filter: ListRunsFilter = {}): Promise<ListRunsResult> {
+    const limit = clampLimit(filter.limit);
+    const offset = ((): number => {
+      const parsed = filter.cursor !== undefined ? Number.parseInt(filter.cursor, 10) : 0;
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+    })();
+
+    let query = this.db.from(AGENT_TABLES.runs);
+    if (filter.actor !== undefined) query = query.where('actor_ref', filter.actor);
+    if (filter.agent !== undefined) query = query.where('agent_name', filter.agent);
+    if (filter.status !== undefined) query = query.where('status', filter.status);
+    if (filter.from !== undefined) {
+      query = query.where('started_at', '>=', Date.parse(`${filter.from}T00:00:00.000Z`));
+    }
+    if (filter.to !== undefined) {
+      query = query.where('started_at', '<=', Date.parse(`${filter.to}T23:59:59.999Z`));
+    }
+    const rows = await query
+      .orderBy('started_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(limit + 1)
+      .offset(offset)
+      .select('*');
+
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    return {
+      runs: page.map(runRowToSummary),
+      nextCursor: hasMore ? String(offset + limit) : null,
+    };
+  }
+
+  /**
+   * The full trace of one run: the run row plus every message / tool call / usage row stamped with
+   * its `run_id` (oldest first), and the subset of tool calls still `pending_approval`. `null` when
+   * the run is unknown.
+   */
+  async runDetail(runId: string): Promise<RunDetail | null> {
+    const runRow = await this.db.from(AGENT_TABLES.runs).where('id', runId).first();
+    if (runRow === null || runRow === undefined) return null;
+
+    const messageRows = await this.db
+      .from(AGENT_TABLES.messages)
+      .where('run_id', runId)
+      .orderBy('created_at', 'asc')
+      .select('*');
+    const toolCallRows = await this.db
+      .from(AGENT_TABLES.toolCalls)
+      .where('run_id', runId)
+      .orderBy('created_at', 'asc')
+      .select('*');
+    const usageRows = await this.db
+      .from(AGENT_TABLES.tokenUsage)
+      .where('run_id', runId)
+      .orderBy('created_at', 'asc')
+      .select('*');
+
+    const messages: RunMessageRow[] = messageRows.map((row) => ({
+      id: String(row.id),
+      role: String(row.role),
+      content: String(row.content),
+      createdAt: new Date(toInt(row.created_at)).toISOString(),
+    }));
+    const toolCalls = toolCallRows.map(toolCallRowToDetail);
+    const usage: RunUsageRow[] = usageRows.map((row) => ({
+      modelId: String(row.model_id),
+      purpose: String(row.purpose),
+      inputTokens: toInt(row.input_tokens),
+      outputTokens: toInt(row.output_tokens),
+      costUsd: toNumOrNull(row.cost_usd),
+      createdAt: new Date(toInt(row.created_at)).toISOString(),
+    }));
+    return {
+      run: runRowToSummary(runRow),
+      messages,
+      toolCalls,
+      approvals: toolCalls.filter((call) => call.status === 'pending_approval'),
+      usage,
+    };
+  }
+
+  /**
+   * Tool calls sitting `pending_approval`, oldest first (an inbox drains from the back). Each call's
+   * owning actor is resolved through its run (`run_id → agent_run.actor_ref`), falling back to its
+   * thread (`message → agent_thread.actor_ref`) for a call recorded before run tracking. The `actor`
+   * filter is applied after resolution; `limit` caps the returned inbox.
+   */
+  async pendingApprovals(filter: PendingApprovalsFilter = {}): Promise<PendingApprovalRow[]> {
+    const limit = clampLimit(filter.limit);
+    const calls = await this.db
+      .from(AGENT_TABLES.toolCalls)
+      .where('status', 'pending_approval')
+      .orderBy('created_at', 'asc')
+      .select('*');
+    const result: PendingApprovalRow[] = [];
+    for (const call of calls) {
+      const message = await this.db
+        .from(AGENT_TABLES.messages)
+        .where('id', String(call.message_id))
+        .first();
+      const threadId =
+        message === null || message === undefined ? '' : String(message.thread_id);
+      const runId =
+        call.run_id !== null && call.run_id !== undefined
+          ? String(call.run_id)
+          : message?.run_id !== null && message?.run_id !== undefined
+            ? String(message.run_id)
+            : null;
+      let actorRef = '';
+      if (runId !== null) {
+        const run = await this.db.from(AGENT_TABLES.runs).where('id', runId).first();
+        if (run !== null && run !== undefined) actorRef = String(run.actor_ref);
+      }
+      if (actorRef === '' && threadId !== '') {
+        const thread = await this.db.from(AGENT_TABLES.threads).where('id', threadId).first();
+        if (thread !== null && thread !== undefined) actorRef = String(thread.actor_ref);
+      }
+      if (filter.actor !== undefined && actorRef !== filter.actor) continue;
+      result.push({
+        toolCallId: String(call.id),
+        toolName: String(call.tool_name),
+        input: parseJsonCol(call.input),
+        threadId,
+        runId,
+        actorRef,
+        requestedAt: new Date(toInt(call.created_at)).toISOString(),
+      });
+      if (result.length >= limit) break;
+    }
+    return result;
+  }
+
+  /**
+   * Per-tool call/failure/rejection/latency rollup over the (optional) range, highest call count
+   * first. `avgDurationMs` is the mean `execution_ms` across calls that recorded one; `null` when
+   * none did.
+   */
+  async perToolStats(range: ToolStatsRange = {}): Promise<PerToolStatRow[]> {
+    const { start, end } = optionalDayBounds(range);
+    let query = this.db.from(AGENT_TABLES.toolCalls);
+    if (start !== undefined) query = query.where('created_at', '>=', start);
+    if (end !== undefined) query = query.where('created_at', '<=', end);
+    const calls = await query.select('*');
+
+    const byTool = new Map<
+      string,
+      {
+        toolName: string;
+        toolType: string;
+        calls: number;
+        failed: number;
+        rejected: number;
+        durationSum: number;
+        durationCount: number;
+      }
+    >();
+    for (const call of calls) {
+      const toolName = String(call.tool_name);
+      const toolType = String(call.tool_type);
+      const key = `${toolName} ${toolType}`;
+      const bucket = byTool.get(key) ?? {
+        toolName,
+        toolType,
+        calls: 0,
+        failed: 0,
+        rejected: 0,
+        durationSum: 0,
+        durationCount: 0,
+      };
+      bucket.calls += 1;
+      if (String(call.status) === 'failed') bucket.failed += 1;
+      if (String(call.status) === 'rejected') bucket.rejected += 1;
+      const execMs = toNumOrNull(call.execution_ms);
+      if (execMs !== null) {
+        bucket.durationSum += execMs;
+        bucket.durationCount += 1;
+      }
+      byTool.set(key, bucket);
+    }
+    const result: PerToolStatRow[] = [];
+    for (const bucket of byTool.values()) {
+      result.push({
+        toolName: bucket.toolName,
+        toolType: bucket.toolType,
+        calls: bucket.calls,
+        failed: bucket.failed,
+        rejected: bucket.rejected,
+        avgDurationMs: bucket.durationCount === 0 ? null : bucket.durationSum / bucket.durationCount,
+      });
+    }
+    result.sort(
+      (left, right) => right.calls - left.calls || left.toolName.localeCompare(right.toolName),
+    );
+    return result;
+  }
+
+  /**
+   * Success / failure / cancel rates + mean settled-run duration over the (optional) range, bucketed
+   * on `started_at`. A store without recorded runs yields all zeros / `null` duration.
+   */
+  async runReliability(range: ToolStatsRange = {}): Promise<RunReliability> {
+    const { start, end } = optionalDayBounds(range);
+    let query = this.db.from(AGENT_TABLES.runs);
+    if (start !== undefined) query = query.where('started_at', '>=', start);
+    if (end !== undefined) query = query.where('started_at', '<=', end);
+    const runs = await query.select('*');
+
+    let completed = 0;
+    let failed = 0;
+    let cancelled = 0;
+    let running = 0;
+    let durationSum = 0;
+    let durationCount = 0;
+    for (const run of runs) {
+      const status = String(run.status);
+      if (status === 'completed') completed += 1;
+      else if (status === 'failed') failed += 1;
+      else if (status === 'cancelled') cancelled += 1;
+      else running += 1;
+      const finishedAt = run.finished_at;
+      if (status !== 'running' && finishedAt !== null && finishedAt !== undefined) {
+        durationSum += toInt(finishedAt) - toInt(run.started_at);
+        durationCount += 1;
+      }
+    }
+    const total = runs.length;
+    return {
+      runs: total,
+      completed,
+      failed,
+      cancelled,
+      running,
+      successRate: total === 0 ? 0 : completed / total,
+      failureRate: total === 0 ? 0 : failed / total,
+      cancelRate: total === 0 ? 0 : cancelled / total,
+      avgDurationMs: durationCount === 0 ? null : durationSum / durationCount,
+    };
   }
 }

@@ -29,6 +29,9 @@ export class InlineAgentRunner implements AgentRunner {
     void runAgentLoop({ ...deps, day }, input, hooks).catch(async (error) => {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[@adonis-agora/agent] run ${runId} failed: ${message}`);
+      // Settle the run's persisted outcome — the loop only records completions (it can't catch its
+      // own crash). First-terminal, so this can't clobber a completion that already landed.
+      await this.store.recordRunEnd({ runId, status: 'failed', error: message });
       // Surface the failure on the live stream and close it, so a subscriber isn't left hanging.
       const writer = await deps.sink.open(runId);
       await writer.write(new TextEncoder().encode(`\n[error] ${message}`));
@@ -48,6 +51,9 @@ export class InlineAgentRunner implements AgentRunner {
   }
 
   async cancel(runId: string): Promise<void> {
+    // Best-effort: settle the run `cancelled` (first-terminal, so a completed run stays completed),
+    // then close the live stream so a subscriber isn't left hanging.
+    await this.store.recordRunEnd({ runId, status: 'cancelled' });
     const deps = this.factory.forAgent();
     const writer = await deps.sink.open(runId);
     await writer.end();
@@ -56,6 +62,7 @@ export class InlineAgentRunner implements AgentRunner {
   private topLevelHooks(runId: string, deps: AgentDeps, actor: Actor, day: string): AgentLoopHooks {
     return {
       runId,
+      durable: false,
       openSink: () => deps.sink.open(runId),
       awaitApproval: (call) =>
         new Promise<Decision>((resolve) => {
@@ -79,6 +86,7 @@ export class InlineAgentRunner implements AgentRunner {
     const deps = this.factory.forAgent(agentName);
     const hooks: AgentLoopHooks = {
       runId,
+      durable: false,
       openSink: () => deps.sink.open(runId),
       // A nested sub-agent has no human to ask — decline action tools rather than hang.
       awaitApproval: async () => ({

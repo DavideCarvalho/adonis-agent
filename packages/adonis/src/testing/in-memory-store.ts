@@ -1,7 +1,10 @@
 import type {
+  AgentRunStatus,
   AgentStore,
   AppendMessageInput,
   CreateThreadInput,
+  RecordRunEndInput,
+  RecordRunStartInput,
   RecordToolCallInput,
   RecordUsageInput,
   StoredMessage,
@@ -21,19 +24,23 @@ interface ToolCallRow {
   toolCallId: string;
   messageId: string;
   threadId: string;
+  runId?: string;
   toolName: string;
   toolType: 'read' | 'action';
   input: unknown;
   output?: unknown;
   status: ToolCallStatus;
   error?: string;
+  executionMs?: number;
   createdAt: string;
 }
 
 interface UsageRow {
   actorRef: string;
   threadId: string;
+  runId?: string;
   modelId: string;
+  purpose: string;
   inputTokens: number;
   outputTokens: number;
   cacheWriteTokens?: number;
@@ -43,11 +50,30 @@ interface UsageRow {
   createdAt: string;
 }
 
+interface RunRow {
+  runId: string;
+  threadId: string;
+  actorRef: string;
+  tenantRef?: string;
+  agentName?: string;
+  status: AgentRunStatus;
+  startedAt: string;
+  finishedAt?: string;
+  stepCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd?: number;
+  error?: string;
+  durable: boolean;
+}
+
 /** A recorded usage row exposed to the governance read-model (input/output split + thread/day). */
 export interface GovernanceUsageRow {
   actorRef: string;
   threadId: string;
+  runId?: string;
   modelId: string;
+  purpose?: string;
   inputTokens: number;
   outputTokens: number;
   /** Subset of `inputTokens` written to the prompt cache this turn; undefined when not reported. */
@@ -67,6 +93,39 @@ export interface GovernanceToolCallRow {
   toolType: 'read' | 'action';
   status: ToolCallStatus;
   threadId: string;
+  runId?: string;
+  input: unknown;
+  output?: unknown;
+  error?: string;
+  executionMs?: number;
+  createdAt: string;
+}
+
+/** A recorded run exposed to the governance read-model (full lifecycle + rollups). */
+export interface GovernanceRunRow {
+  runId: string;
+  threadId: string;
+  actorRef: string;
+  tenantRef?: string;
+  agentName?: string;
+  status: AgentRunStatus;
+  startedAt: string;
+  finishedAt?: string;
+  stepCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd?: number;
+  error?: string;
+  durable: boolean;
+}
+
+/** A recorded message exposed to the governance read-model (for run-detail assembly). */
+export interface GovernanceMessageRow {
+  id: string;
+  threadId: string;
+  runId?: string;
+  role: string;
+  content: string;
   createdAt: string;
 }
 
@@ -84,6 +143,9 @@ export class InMemoryAgentStore implements AgentStore {
   private readonly threads = new Map<string, ThreadRow>();
   private readonly toolCalls = new Map<string, ToolCallRow>();
   private readonly usage: UsageRow[] = [];
+  private readonly runs = new Map<string, RunRow>();
+  /** messageId → runId, so run-detail can gather a run's messages without mutating `StoredMessage`. */
+  private readonly messageRunIds = new Map<string, string>();
 
   private now(): string {
     return new Date().toISOString();
@@ -191,6 +253,9 @@ export class InMemoryAgentStore implements AgentStore {
     };
     row.messages.push(message);
     row.updatedAt = message.createdAt;
+    if (input.runId !== undefined) {
+      this.messageRunIds.set(message.id, input.runId);
+    }
     return message;
   }
 
@@ -215,6 +280,7 @@ export class InMemoryAgentStore implements AgentStore {
       input: input.input,
       status: input.status,
       createdAt: this.now(),
+      ...(input.runId !== undefined ? { runId: input.runId } : {}),
     });
   }
 
@@ -230,6 +296,9 @@ export class InMemoryAgentStore implements AgentStore {
     if (input.error !== undefined) {
       row.error = input.error;
     }
+    if (input.executionMs !== undefined) {
+      row.executionMs = input.executionMs;
+    }
   }
 
   async recordUsage(input: RecordUsageInput): Promise<void> {
@@ -238,10 +307,12 @@ export class InMemoryAgentStore implements AgentStore {
       actorRef: input.actorRef,
       threadId: input.threadId,
       modelId: input.modelId,
+      purpose: input.purpose,
       inputTokens: input.usage.inputTokens,
       outputTokens: input.usage.outputTokens,
       day: createdAt.slice(0, 10),
       createdAt,
+      ...(input.runId !== undefined ? { runId: input.runId } : {}),
       ...(input.usage.cacheWriteTokens !== undefined
         ? { cacheWriteTokens: input.usage.cacheWriteTokens }
         : {}),
@@ -250,6 +321,38 @@ export class InMemoryAgentStore implements AgentStore {
         : {}),
       ...(input.costUsd !== undefined ? { costUsd: input.costUsd } : {}),
     });
+  }
+
+  async recordRunStart(input: RecordRunStartInput): Promise<void> {
+    this.runs.set(input.runId, {
+      runId: input.runId,
+      threadId: input.threadId,
+      actorRef: input.actor.id,
+      status: 'running',
+      startedAt: this.now(),
+      stepCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      durable: input.durable ?? false,
+      ...(input.actor.tenantRef !== undefined ? { tenantRef: input.actor.tenantRef } : {}),
+      ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+    });
+  }
+
+  async recordRunEnd(input: RecordRunEndInput): Promise<void> {
+    const row = this.runs.get(input.runId);
+    // First terminal wins: a no-op when the run is unknown or already settled (mirrors the Lucid twin).
+    if (row === undefined || row.status !== 'running') {
+      return;
+    }
+    row.status = input.status;
+    row.finishedAt =
+      input.finishedAt !== undefined ? new Date(input.finishedAt).toISOString() : this.now();
+    if (input.stepCount !== undefined) row.stepCount = input.stepCount;
+    if (input.inputTokens !== undefined) row.inputTokens = input.inputTokens;
+    if (input.outputTokens !== undefined) row.outputTokens = input.outputTokens;
+    if (input.costUsd !== undefined) row.costUsd = input.costUsd;
+    if (input.error !== undefined) row.error = input.error;
   }
 
   async quotaToday(actorRef: string, day: string): Promise<{ usedTokens: number }> {
@@ -274,10 +377,12 @@ export class InMemoryAgentStore implements AgentStore {
       actorRef: row.actorRef,
       threadId: row.threadId,
       modelId: row.modelId,
+      purpose: row.purpose,
       inputTokens: row.inputTokens,
       outputTokens: row.outputTokens,
       day: row.day,
       createdAt: row.createdAt,
+      ...(row.runId !== undefined ? { runId: row.runId } : {}),
       ...(row.cacheWriteTokens !== undefined ? { cacheWriteTokens: row.cacheWriteTokens } : {}),
       ...(row.cacheReadTokens !== undefined ? { cacheReadTokens: row.cacheReadTokens } : {}),
       ...(row.costUsd !== undefined ? { costUsd: row.costUsd } : {}),
@@ -292,8 +397,37 @@ export class InMemoryAgentStore implements AgentStore {
       toolType: row.toolType,
       status: row.status,
       threadId: row.threadId,
+      input: row.input,
       createdAt: row.createdAt,
+      ...(row.runId !== undefined ? { runId: row.runId } : {}),
+      ...(row.output !== undefined ? { output: row.output } : {}),
+      ...(row.error !== undefined ? { error: row.error } : {}),
+      ...(row.executionMs !== undefined ? { executionMs: row.executionMs } : {}),
     }));
+  }
+
+  /** Governance read-model feed: recorded runs (full lifecycle + rollups). */
+  governanceRuns(): GovernanceRunRow[] {
+    return [...this.runs.values()].map((row) => ({ ...row }));
+  }
+
+  /** Governance read-model feed: recorded messages with their thread + run correlation. */
+  governanceMessages(): GovernanceMessageRow[] {
+    const rows: GovernanceMessageRow[] = [];
+    for (const thread of this.threads.values()) {
+      for (const message of thread.messages) {
+        const runId = this.messageRunIds.get(message.id);
+        rows.push({
+          id: message.id,
+          threadId: thread.id,
+          role: message.role,
+          content: message.content,
+          createdAt: message.createdAt,
+          ...(runId !== undefined ? { runId } : {}),
+        });
+      }
+    }
+    return rows;
   }
 
   /** Governance read-model feed: thread metadata (title/actor/message count/last activity). */

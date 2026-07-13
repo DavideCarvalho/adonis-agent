@@ -80,6 +80,7 @@ export class AgentRunWorkflow {
 
     const hooks: AgentLoopHooks = {
       runId: ctx.runId,
+      durable: true,
       // A child forwards into the top-level sink (so the human watching the parent sees it) but must
       // not end it; a top-level run opens and owns its own sink keyed by its runId.
       openSink: async () =>
@@ -127,6 +128,12 @@ export class AgentRunWorkflow {
       // close it, then rethrow so the engine still records the run as failed. Only a top-level run
       // owns the stream — a child defers the surfaced error to its ancestor, which also unwinds.
       const message = error instanceof Error ? error.message : String(error);
+      // Settle the run's persisted outcome (the loop only records completions — it can't catch its
+      // own crash). A checkpointed step so a replay re-settles the ONE row idempotently; first-
+      // terminal, so it can't clobber a completion. Each run (parent AND child) owns its own row.
+      await ctx.localStep('persist:run:fail', () =>
+        store.recordRunEnd({ runId: ctx.runId, status: 'failed', error: message }),
+      );
       if (!isChild) {
         const writer = await deps.sink.open(ctx.runId);
         await writer.write(new TextEncoder().encode(`\n[error] ${message}`));

@@ -1,6 +1,7 @@
 import type { WorkflowEngine } from '@adonis-agora/durable';
 import { utcDay } from '../agent-deps.js';
 import type { AgentRunner } from '../spi/agent-runner.js';
+import type { AgentStore } from '../spi/agent-store.js';
 import type { AgentRunInput, Decision } from '../types.js';
 import { AgentRunWorkflow, type DurableAgentRunInput } from './agent-run-workflow.js';
 
@@ -23,7 +24,14 @@ function isControlFlowSignal(error: unknown): boolean {
  * by run, so it can never cross-resolve another run. Mirrors the {@link InlineAgentRunner} interface.
  */
 export class DurableAgentRunner implements AgentRunner {
-  constructor(private readonly engine: WorkflowEngine) {}
+  /**
+   * `store` is optional so a bare `new DurableAgentRunner(engine)` still works; when passed (the
+   * provider does), {@link cancel} settles the `agent_run` row `cancelled` for governance.
+   */
+  constructor(
+    private readonly engine: WorkflowEngine,
+    private readonly store?: AgentStore,
+  ) {}
 
   async start(input: AgentRunInput): Promise<{ runId: string }> {
     const stamped: DurableAgentRunInput = { ...input, day: input.day ?? utcDay() };
@@ -50,5 +58,7 @@ export class DurableAgentRunner implements AgentRunner {
     // Best-effort: cascade cancellation to children and broadcast to the owning worker. A run that
     // already settled is a no-op. Errors are swallowed — cancel is advisory, not a guarantee.
     await this.engine.cancel(runId).catch(() => undefined);
+    // Settle the persisted run `cancelled` (first-terminal: a run that already completed stays put).
+    await this.store?.recordRunEnd({ runId, status: 'cancelled' }).catch(() => undefined);
   }
 }
