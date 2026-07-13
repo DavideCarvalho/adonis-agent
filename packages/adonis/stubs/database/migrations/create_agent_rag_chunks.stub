@@ -1,0 +1,41 @@
+{{{
+  exports({ to: app.migrationsPath(`${new Date().getTime()}_create_agent_rag_chunks.ts`) })
+}}}
+import { BaseSchema } from '@adonisjs/lucid/schema'
+
+/**
+ * The pgvector chunk table for the @adonis-agora/agent `retrievers.pgvector({...})` store: one row per
+ * embedded chunk (id `${documentId}#<n>`), the chunk text, an optional citation source, a `jsonb`
+ * metadata column filtered with `@>`, and the `vector(N)` embedding ranked with the `<=>`/`<->`/`<#>`
+ * operators. Requires the pgvector extension (`CREATE EXTENSION vector`) — Postgres only.
+ *
+ * Set `DIMENSION` to your embedding model's width (e.g. 1536 for text-embedding-3-small) and `OPCLASS`
+ * to the index operator class matching the store's metric: `vector_cosine_ops` (default),
+ * `vector_l2_ops`, or `vector_ip_ops`.
+ */
+const TABLE = 'agent_rag_chunks'
+const DIMENSION = 1536
+const OPCLASS = 'vector_cosine_ops'
+
+export default class extends BaseSchema {
+  async up() {
+    this.schema.raw('CREATE EXTENSION IF NOT EXISTS vector')
+
+    this.schema.createTable(TABLE, (table) => {
+      table.text('id').primary()
+      table.text('text').notNullable()
+      table.text('source')
+      table.jsonb('metadata')
+      table.specificType('embedding', `vector(${DIMENSION})`).notNullable()
+    })
+
+    // Approximate-nearest-neighbour index for the configured metric. Drop it to fall back to an exact scan.
+    this.schema.raw(
+      `CREATE INDEX IF NOT EXISTS ${TABLE}_embedding_idx ON ${TABLE} USING hnsw (embedding ${OPCLASS})`
+    )
+  }
+
+  async down() {
+    this.schema.dropTableIfExists(TABLE)
+  }
+}

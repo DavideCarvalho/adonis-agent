@@ -33,6 +33,7 @@ import type {
   MemoryActorDirectoryConfig,
   MemoryRetrieverConfig,
   MemoryStoreConfig,
+  PgVectorRetrieverConfig,
   PricingContext,
   PricingFactory,
   QuotaConfig,
@@ -111,8 +112,8 @@ export interface AgentConfig {
   /**
    * Enables always-on ("inject") RAG: before each turn the loop retrieves passages for the user message
    * and folds them into the system prompt (replay-safe under durable). Pass a {@link Retriever} directly
-   * or a lazy factory — `retrievers.memory({ embedder, documents })` for the in-memory cosine store.
-   * Omit → no injection. A pgvector/Lucid-backed retriever is deferred.
+   * or a lazy factory — `retrievers.pgvector({ embedder, table, dimension })` for the production pgvector
+   * store, or `retrievers.memory({ embedder, documents })` for the in-memory cosine store. Omit → no injection.
    */
   retriever?: Retriever | RetrieverFactory;
   /** How many passages inject-mode retrieval requests per run. Default 5. */
@@ -215,6 +216,7 @@ export type {
   RetrieverContext,
   RetrieverFactory,
   MemoryRetrieverConfig,
+  PgVectorRetrieverConfig,
   EmbeddingFactory,
   AttachmentStagingContext,
   AttachmentStagingFactory,

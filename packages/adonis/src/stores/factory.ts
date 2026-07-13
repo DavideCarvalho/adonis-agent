@@ -1,5 +1,6 @@
 import type { ApplicationService } from '@adonisjs/core/types';
 import type { IngestDocument } from '../rag/ingest.js';
+import type { PgVectorColumns, PgVectorMetric } from '../rag/pg-vector-store.js';
 import type { RedisStreamClient } from '../redis-stream-client.js';
 import type { ActorDirectory } from '../spi/actor-directory.js';
 import type { AgentStore } from '../spi/agent-store.js';
@@ -271,6 +272,38 @@ export interface MemoryRetrieverConfig {
   overlap?: number;
 }
 
+/** Options for the pgvector-backed retriever (production RAG over `@adonisjs/lucid` + pgvector). */
+export interface PgVectorRetrieverConfig {
+  /** The embedding provider (query + ingestion), or a lazy factory so its SDK peer loads lazily. */
+  embedder: EmbeddingProvider | EmbeddingFactory;
+  /**
+   * A structural Lucid DB handle (bring-your-own). Omit to resolve `@adonisjs/lucid`'s default `db`
+   * service lazily inside the thunk (optionally on `connection`), keeping the peer optional.
+   */
+  db?: LucidDatabaseLike;
+  /** Lucid connection name (used only when `db` is omitted). Defaults to the `Database` default. */
+  connection?: string;
+  /** Chunk table name. Default `agent_rag_chunks`. Validated against a strict identifier regex. */
+  table?: string;
+  /** Embedding width — must match the model (e.g. 1536 for text-embedding-3-small). Default 1536. */
+  dimension?: number;
+  /** Similarity metric / distance operator (`cosine` default, `l2`, `inner`). */
+  metric?: PgVectorMetric;
+  /** Override the physical column names (each validated). */
+  columns?: PgVectorColumns;
+  /**
+   * Provision the `vector` extension, table, and index at boot (idempotent DDL). Handy for tests/scripts;
+   * production should run the bundled migration instead. Default `false`.
+   */
+  ensureSchema?: boolean;
+  /** Documents to ingest at boot (chunk → embed → upsert). Omit to ingest separately at runtime. */
+  documents?: IngestDocument[];
+  /** Target max characters per chunk. Default 800. */
+  chunkSize?: number;
+  /** Characters of overlap between chunks. Default 100. */
+  overlap?: number;
+}
+
 /**
  * The retriever factory namespace used in `config/agent.ts`, mirroring {@link stores}:
  *
@@ -282,7 +315,8 @@ export interface MemoryRetrieverConfig {
  * })
  * ```
  *
- * A pgvector/Lucid-backed retriever is deferred; `retrievers.memory` covers tests and small corpora.
+ * Use `retrievers.pgvector({...})` for the production pgvector/Lucid store; `retrievers.memory` covers
+ * tests and small/embedded corpora.
  */
 export const retrievers = {
   /** In-memory embedding retriever — cosine over a Map, single-process. Handy for tests and dev apps. */
@@ -303,6 +337,47 @@ export const retrievers = {
         });
       }
       return new EmbeddingRetriever(embedder, store);
+    };
+  },
+
+  /**
+   * Production pgvector retriever — cosine/L2/inner similarity over a `vector(N)` column via
+   * `@adonisjs/lucid` (raw SQL for the pgvector operators; the embedding is a `?::vector` binding). The
+   * Lucid peer is imported lazily inside the thunk (unless a structural `db` is passed), so it stays
+   * optional. Pass `ensureSchema: true` to provision the extension/table/index at boot for tests.
+   */
+  pgvector(config: PgVectorRetrieverConfig): RetrieverFactory {
+    return async () => {
+      const { PgVectorStore, PgVectorRetriever } = await import('../rag/pg-vector-store.js');
+      const { ingestDocuments } = await import('../rag/ingest.js');
+      const embedder =
+        typeof config.embedder === 'function' ? await config.embedder() : config.embedder;
+      const db =
+        config.db ??
+        (await (async () => {
+          const dbService = (await import('@adonisjs/lucid/services/db')).default;
+          return (config.connection !== undefined
+            ? dbService.connection(config.connection)
+            : dbService) as unknown as LucidDatabaseLike;
+        })());
+      const store = new PgVectorStore(db, {
+        ...(config.table !== undefined ? { table: config.table } : {}),
+        ...(config.dimension !== undefined ? { dimension: config.dimension } : {}),
+        ...(config.metric !== undefined ? { metric: config.metric } : {}),
+        ...(config.columns !== undefined ? { columns: config.columns } : {}),
+      });
+      if (config.ensureSchema === true) {
+        await store.ensureSchema();
+      }
+      if (config.documents !== undefined && config.documents.length > 0) {
+        await ingestDocuments(config.documents, {
+          embedder,
+          store,
+          ...(config.chunkSize !== undefined ? { chunkSize: config.chunkSize } : {}),
+          ...(config.overlap !== undefined ? { overlap: config.overlap } : {}),
+        });
+      }
+      return new PgVectorRetriever(embedder, store);
     };
   },
 };

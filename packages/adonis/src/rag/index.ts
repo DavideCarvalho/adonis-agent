@@ -10,6 +10,14 @@ export { matchesFilter } from './filter.js';
 export { MemoryVectorStore, cosineSimilarity } from './memory-vector-store.js';
 export { EmbeddingRetriever } from './embedding-retriever.js';
 export {
+  PgVectorStore,
+  PgVectorRetriever,
+  toVectorLiteral,
+  type PgVectorMetric,
+  type PgVectorColumns,
+  type PgVectorStoreOptions,
+} from './pg-vector-store.js';
+export {
   chunkDocuments,
   ingestChunks,
   ingestDocuments,

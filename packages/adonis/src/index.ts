@@ -79,6 +79,7 @@ export type {
   RetrieverContext,
   RetrieverFactory,
   MemoryRetrieverConfig,
+  PgVectorRetrieverConfig,
   EmbeddingFactory,
   AttachmentStagingContext,
   AttachmentStagingFactory,

@@ -10,7 +10,9 @@ import { stubsRoot } from './stubs/main.js';
  *    runtime scan when the barrel is absent);
  * 3. publishes `config/agent.ts`;
  * 4. publishes the Lucid migration for the five agent tables (run `node ace migration:run`; delete it
- *    if you only use the in-memory store).
+ *    if you only use the in-memory store);
+ * 5. publishes the pgvector migration for the RAG chunk table (Postgres + pgvector only; delete it
+ *    unless you use `retrievers.pgvector({...})`).
  */
 export async function configure(command: Configure) {
   const codemods = await command.createCodemods();
@@ -23,4 +25,5 @@ export async function configure(command: Configure) {
 
   await codemods.makeUsingStub(stubsRoot, 'config/agent.stub', {});
   await codemods.makeUsingStub(stubsRoot, 'database/migrations/create_agent_tables.stub', {});
+  await codemods.makeUsingStub(stubsRoot, 'database/migrations/create_agent_rag_chunks.stub', {});
 }
