@@ -1,0 +1,51 @@
+/** Compact number / currency / model-label formatting for the console. All pure; unit-tested. */
+
+/** Format a USD amount. Small amounts keep precision; large ones read as `$1.20k` / `$3.40M`. */
+export function formatUsd(amount: number): string {
+  if (!Number.isFinite(amount)) return '$0.00';
+  const abs = Math.abs(amount);
+  if (abs >= 1_000_000) return `$${(amount / 1_000_000).toFixed(2)}M`;
+  if (abs >= 1_000) return `$${(amount / 1_000).toFixed(2)}k`;
+  if (abs > 0 && abs < 0.01) return '<$0.01';
+  return `$${amount.toFixed(2)}`;
+}
+
+/** Format a token/count with compact suffixes (`1.2k`, `3.4M`, `1.1B`). */
+export function formatCount(value: number): string {
+  if (!Number.isFinite(value)) return '0';
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
+  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return `${Math.round(value)}`;
+}
+
+/** Format a 0..1 ratio as an integer percent (`0.1234` -> `12%`). */
+export function formatPercent(ratio: number): string {
+  if (!Number.isFinite(ratio)) return '0%';
+  return `${Math.round(ratio * 100)}%`;
+}
+
+/**
+ * Shorten a raw model id for display. Bedrock inference-profile ARNs
+ * (`arn:aws:bedrock:…:inference-profile/<region>.<provider>.<model>`) overflow cards, so we keep the
+ * distinguishing `<model>` and drop the ARN prefix plus the region/provider qualifiers. Non-ARN ids
+ * (e.g. `gpt-4o`) pass through unchanged; the full id is surfaced via a `title` tooltip at call sites.
+ */
+export function formatModelLabel(modelId: string): string {
+  if (!modelId.includes('/')) return modelId;
+  const profile = modelId.slice(modelId.lastIndexOf('/') + 1);
+  return profile.replace(/^[a-z]{2}[a-z-]*\.[a-z0-9]+\./, '');
+}
+
+/** Format an ISO timestamp as a short, locale-stable `MMM D, HH:MM` label; `''`/invalid → `—`. */
+export function formatTimestamp(iso: string): string {
+  if (iso === '') return '—';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '—';
+  const month = date.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' });
+  const day = date.getUTCDate();
+  const hh = String(date.getUTCHours()).padStart(2, '0');
+  const mm = String(date.getUTCMinutes()).padStart(2, '0');
+  return `${month} ${day}, ${hh}:${mm}`;
+}

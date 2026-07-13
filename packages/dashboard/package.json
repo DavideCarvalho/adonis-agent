@@ -1,0 +1,80 @@
+{
+  "name": "@adonis-agora/agent-dashboard",
+  "version": "0.1.0",
+  "description": "Read-only governance console (spend by model/actor, usage trend, recent threads & tool calls, quota) for @adonis-agora/agent — a dependency-light React SPA served by a thin AdonisJS provider. Part of the Agora ecosystem.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavideCarvalho/adonis-agent.git",
+    "directory": "packages/dashboard"
+  },
+  "author": "Davi Carvalho <davi@goflip.ai>",
+  "type": "module",
+  "main": "./dist/providers/agent_dashboard_provider.js",
+  "types": "./dist/providers/agent_dashboard_provider.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/providers/agent_dashboard_provider.d.ts",
+      "import": "./dist/providers/agent_dashboard_provider.js",
+      "default": "./dist/providers/agent_dashboard_provider.js"
+    },
+    "./agent_dashboard_provider": {
+      "types": "./dist/providers/agent_dashboard_provider.d.ts",
+      "import": "./dist/providers/agent_dashboard_provider.js",
+      "default": "./dist/providers/agent_dashboard_provider.js"
+    },
+    "./client": {
+      "types": "./dist/src/client/index.d.ts",
+      "import": "./dist/src/client/index.js",
+      "default": "./dist/src/client/index.js"
+    }
+  },
+  "files": ["dist/", "README.md", "CHANGELOG.md"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "vite build && tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.app.json --noEmit"
+  },
+  "peerDependencies": {
+    "@adonisjs/core": "^7.3.0",
+    "@adonis-agora/agent": "workspace:^"
+  },
+  "peerDependenciesMeta": {
+    "@adonisjs/core": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@adonisjs/core": "^7.3.0",
+    "@adonis-agora/agent": "workspace:*",
+    "@testing-library/react": "^16.1.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^25.0.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.4.0",
+    "vite": "^7.0.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "keywords": [
+    "adonisjs",
+    "adonis",
+    "ai",
+    "agent",
+    "governance",
+    "dashboard",
+    "spa",
+    "react",
+    "spend",
+    "usage",
+    "agora"
+  ]
+}
