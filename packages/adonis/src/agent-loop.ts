@@ -1,13 +1,20 @@
 import {
   publishAgentDelegated,
   publishAgentMessage,
+  publishAgentRetrieved,
   publishAgentRunFinished,
   publishAgentRunStarted,
   publishAgentToolCall,
 } from './diagnostics.js';
 import type { AgentStore } from './spi/agent-store.js';
 import type { ModelProvider } from './spi/model-provider.js';
+import {
+  type AgentPricingStore,
+  type CurrentModelPrice,
+  estimateCost,
+} from './spi/pricing-store.js';
 import type { QuotaStore } from './spi/quota-store.js';
+import type { Passage, Retriever } from './spi/retriever.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { SinkWriter } from './spi/token-stream-sink.js';
 import type { AiToolCtx } from './spi/tool.js';
@@ -15,6 +22,7 @@ import type { ToolRegistry } from './tool-registry.js';
 import type {
   AgentRunInput,
   Decision,
+  MessageUsage,
   ModelMessage,
   PromptBuilder,
   PromptContext,
@@ -29,6 +37,13 @@ export interface AgentLoopDeps {
   rolesPolicy: RolesPolicy;
   quota?: QuotaStore;
   /**
+   * Prices each step's token usage into `usage.costUsd` on the persisted assistant message. The
+   * current price list is fetched ONCE per run (not per step) and reused for every step's estimate.
+   * Undefined → `costUsd` is always `null` (never a fabricated `0`). A provider-reported cost always
+   * wins over the estimate.
+   */
+  pricingStore?: AgentPricingStore;
+  /**
    * Fallback accounting label when the provider's turn result doesn't report a `modelId`.
    * Optional — a provider that reports its own model makes this unnecessary.
    */
@@ -42,6 +57,26 @@ export interface AgentLoopDeps {
   host?: unknown;
   /** Agent-level tool allow-list (intersected with the persona's). Undefined → all tools. */
   toolAllowList?: string[];
+  /**
+   * Enables always-on ("inject") RAG: before the turn, retrieve passages for the user message and fold
+   * them into the system prompt. Its presence IS inject mode (a retriever wired as a `read` tool for
+   * agentic retrieval sets nothing here). Retrieval runs inside `hooks.step` so durable replay reuses
+   * the same passages deterministically. Undefined → no injection (unchanged behavior).
+   */
+  retriever?: Retriever;
+  /** How many passages inject-mode retrieval requests. Undefined → 5. */
+  retrievalTopK?: number;
+}
+
+/** Renders retrieved passages as a numbered, citable context block appended to the system prompt. */
+function buildContextBlock(passages: Passage[]): string {
+  const items = passages
+    .map((passage, index) => {
+      const label = passage.source !== undefined ? ` (${passage.source})` : '';
+      return `[${index + 1}]${label} ${passage.text}`;
+    })
+    .join('\n\n');
+  return `<retrieved_context>\n${items}\n</retrieved_context>\nUse the retrieved context above to answer when relevant, and cite sources by their bracket number.`;
 }
 
 /** Intersect two allow-lists where `undefined` means "no restriction". */
@@ -122,6 +157,22 @@ function deriveTitle(userText: string): string {
 }
 
 /**
+ * A step's cost: the provider's own reported figure when it has one (a gateway), else an estimate
+ * from `price` when the model has a current price row, else `null` — never a fabricated `0` for
+ * "we don't know". Mirrors the reference resolution order exactly.
+ */
+function resolveCostUsd(
+  usage: MessageUsage,
+  reportedCostUsd: number | undefined,
+  price: CurrentModelPrice | undefined,
+): number | null {
+  if (reportedCostUsd !== undefined) {
+    return reportedCostUsd;
+  }
+  return price === undefined ? null : estimateCost(usage, price);
+}
+
+/**
  * The provider-agnostic agent turn, reused by both the inline and durable runners.
  * It drives the model→tools→model iteration; the runner supplies the `step`/`awaitApproval`
  * hooks that make the same loop body either in-process or a replay-safe durable workflow.
@@ -133,7 +184,7 @@ export async function runAgentLoop(
 ): Promise<{ text: string }> {
   const maxSteps = deps.maxSteps ?? 8;
   const persona = input.persona;
-  const system = await resolveSystemPrompt(deps, input);
+  let system = await resolveSystemPrompt(deps, input);
 
   if (deps.quota !== undefined) {
     const quota = deps.quota;
@@ -173,6 +224,31 @@ export async function runAgentLoop(
     ...(persona !== undefined ? { persona: persona.id } : {}),
   });
 
+  // Inject-mode RAG: retrieve once for the user message and fold the passages into the system prompt.
+  // Wrapped in `hooks.step` so a durable replay reuses the SAME passages (no re-query, deterministic
+  // prompt). Recorded below as a synthetic auto-executed `retrieve` tool call on the first assistant
+  // message, so citations surface through the same machinery as an agentic search would.
+  let injectedPassages: Passage[] | undefined;
+  if (deps.retriever !== undefined) {
+    const retriever = deps.retriever;
+    const topK = deps.retrievalTopK ?? 5;
+    const passages = await hooks.step('retrieve', () => retriever.retrieve(input.userText, { topK }));
+    if (passages.length > 0) {
+      injectedPassages = passages;
+      system = `${system}\n\n${buildContextBlock(passages)}`;
+    }
+    publishAgentRetrieved({ runId: hooks.runId, queryLength: input.userText.length, count: passages.length });
+  }
+
+  // Fetched ONCE per run (not per step) and reused for every step's cost estimate below. Returned as
+  // a plain array (not the Map built from it) so a durable runner can JSON-cache the step's result.
+  let prices: CurrentModelPrice[] = [];
+  if (deps.pricingStore !== undefined) {
+    const pricingStore = deps.pricingStore;
+    prices = await hooks.step('pricing:list', () => pricingStore.listCurrentPrices());
+  }
+  const priceByModel = new Map(prices.map((price) => [price.modelId, price]));
+
   // NOTE: no try/finally around this loop. A durable runner suspends by THROWING through the stack
   // at `awaitApproval` (ctx.waitForSignal); a finally would then call writer.end() on every suspend
   // and prematurely close the live stream. We only end on normal completion — the throw propagates
@@ -188,12 +264,17 @@ export async function runAgentLoop(
       deps.model.runTurn({ system, messages: modelMessages, tools, sink: writer }),
     );
 
+    // provider-reported model wins over the configured fallback, so cost can't misattribute
+    const resolvedModelId = turn.modelId ?? deps.modelId ?? 'unknown';
+    // Provider-reported spend wins; else an estimate from the (once-per-run cached) price list; else
+    // `null` — stamped onto the persisted assistant message's `usage.costUsd` below.
+    const costUsd = resolveCostUsd(turn.usage, turn.costUsd, priceByModel.get(resolvedModelId));
+
     await hooks.step(`persist:usage:${i}`, () =>
       deps.store.recordUsage({
         threadId: input.threadId,
         actorRef: input.actor.id,
-        // provider-reported model wins over the configured fallback, so cost can't misattribute
-        modelId: turn.modelId ?? deps.modelId ?? 'unknown',
+        modelId: resolvedModelId,
         purpose: 'chat',
         usage: turn.usage,
         // persist the provider's actual cost when reported; the read-model prefers it over pricing
@@ -222,7 +303,7 @@ export async function runAgentLoop(
         threadId: input.threadId,
         role: 'assistant',
         content: turn.text,
-        usage: turn.usage,
+        usage: { ...turn.usage, costUsd },
         ...(persona !== undefined ? { persona: persona.id } : {}),
         ...(turn.toolCalls.length > 0 ? { toolCalls: turn.toolCalls } : {}),
       }),
@@ -232,6 +313,25 @@ export async function runAgentLoop(
       content: turn.text,
       ...(turn.toolCalls.length > 0 ? { toolCalls: turn.toolCalls } : {}),
     });
+
+    // Record inject-mode retrieval as a synthetic auto-executed `retrieve` tool call on the assistant
+    // message it informed — so its passages persist and render as citations exactly like an agentic
+    // search would, without a new message field. One durable step keeps replay from re-writing it.
+    if (i === 0 && injectedPassages !== undefined) {
+      const passages = injectedPassages;
+      const toolCallId = `retrieve-${assistant.id}`;
+      await hooks.step(`persist:retrieval:${assistant.id}`, async () => {
+        await deps.store.recordToolCall({
+          toolCallId,
+          messageId: assistant.id,
+          toolName: 'retrieve',
+          toolType: 'read',
+          input: { query: input.userText },
+          status: 'auto_executed',
+        });
+        await deps.store.updateToolCall({ toolCallId, status: 'executed', output: { passages } });
+      });
+    }
 
     if (turn.toolCalls.length === 0) {
       break;

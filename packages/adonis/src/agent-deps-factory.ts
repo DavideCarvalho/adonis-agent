@@ -3,7 +3,9 @@ import type { AgentDeps } from './agent-deps.js';
 import type { AgentRegistry } from './agent-registry.js';
 import type { AgentStore } from './spi/agent-store.js';
 import type { ModelProvider } from './spi/model-provider.js';
+import type { AgentPricingStore } from './spi/pricing-store.js';
 import type { QuotaStore } from './spi/quota-store.js';
+import type { Retriever } from './spi/retriever.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { TokenStreamSink } from './spi/token-stream-sink.js';
 import type { ToolRegistry } from './tool-registry.js';
@@ -80,6 +82,15 @@ export interface AgentDepsFactoryConfig {
   registry: ToolRegistry;
   agents: AgentRegistry;
   quota?: QuotaStore;
+  /** Shared pricing store so every agent's turns are priced from one table. Omit → cost stays `null`. */
+  pricingStore?: AgentPricingStore;
+  /**
+   * Shared inject-mode retriever. When set, every agent's loop retrieves passages for the user message
+   * and folds them into its system prompt (replay-safe under durable). Omit → no injection.
+   */
+  retriever?: Retriever;
+  /** How many passages inject-mode retrieval requests. Undefined → 5. */
+  retrievalTopK?: number;
   /** Name of the implicit default agent. Defaults to `'default'`. */
   defaultAgentName?: string;
 }
@@ -127,6 +138,13 @@ export class AgentDepsFactory {
       defaultPersona: definition?.defaultPersona ?? 'default',
       ...(definition?.modelId !== undefined ? { modelId: definition.modelId } : {}),
       ...(this.config.quota !== undefined ? { quota: this.config.quota } : {}),
+      ...(this.config.pricingStore !== undefined
+        ? { pricingStore: this.config.pricingStore }
+        : {}),
+      ...(this.config.retriever !== undefined ? { retriever: this.config.retriever } : {}),
+      ...(this.config.retrievalTopK !== undefined
+        ? { retrievalTopK: this.config.retrievalTopK }
+        : {}),
       ...(toolAllowList !== undefined ? { toolAllowList } : {}),
     };
   }

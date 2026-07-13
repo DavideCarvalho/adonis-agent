@@ -1,5 +1,10 @@
 import type { ApplicationService } from '@adonisjs/core/types';
+import type { IngestDocument } from '../rag/ingest.js';
 import type { AgentStore } from '../spi/agent-store.js';
+import type { EmbeddingProvider } from '../spi/embedding-provider.js';
+import type { AgentPricingStore } from '../spi/pricing-store.js';
+import type { QuotaStore } from '../spi/quota-store.js';
+import type { Retriever } from '../spi/retriever.js';
 import type { LucidDatabaseLike } from './lucid.js';
 
 /**
@@ -71,6 +76,172 @@ export const stores = {
           ? { autoCreateTables: config.autoCreateTables }
           : {}),
       });
+    };
+  },
+};
+
+// ── Quota factories ──────────────────────────────────────────────────────────
+
+/**
+ * Runtime context a {@link QuotaFactory} thunk receives — the {@link StoreContext} plus the already
+ * built {@link AgentStore}, so a ledger-backed quota store can read the run's own token-usage ledger
+ * (no separate quota table). The provider builds the store first, then the quota, then passes it here.
+ */
+export interface QuotaContext extends StoreContext {
+  store: AgentStore;
+}
+
+/**
+ * A configured quota store: a lazy thunk the agent provider calls at boot. Omitting a quota disables
+ * budgeting (fail-open). A plain `() => new InMemoryQuotaStore()` still satisfies this — the context
+ * arg is optional to consume.
+ */
+export type QuotaFactory = (ctx: QuotaContext) => QuotaStore | Promise<QuotaStore>;
+
+/** Options for both bundled quota stores — the daily per-actor token budget. */
+export interface QuotaConfig {
+  /** Daily token budget per actor. */
+  limitTokens: number;
+}
+
+/**
+ * The quota factory namespace used in `config/agent.ts`, mirroring {@link stores}:
+ *
+ * ```ts
+ * export default defineConfig({
+ *   store: 'lucid',
+ *   stores: { lucid: stores.lucid() },
+ *   quota: quotas.ledger({ limitTokens: 1_000_000 }),
+ * })
+ * ```
+ */
+export const quotas = {
+  /** In-memory per-actor/day budget — single-process, non-durable. Handy for tests and dev apps. */
+  memory(config: QuotaConfig): QuotaFactory {
+    return async () => {
+      const { InMemoryQuotaStore } = await import('../testing/in-memory-quota.js');
+      return new InMemoryQuotaStore(config.limitTokens);
+    };
+  },
+
+  /**
+   * Enforce the budget off the persisted token-usage ledger (the selected `store`) — one source of
+   * truth across replicas, with no double-counting. Pairs with any {@link AgentStore}.
+   */
+  ledger(config: QuotaConfig): QuotaFactory {
+    return async ({ store }) => {
+      const { LedgerQuotaStore } = await import('./ledger-quota.js');
+      return new LedgerQuotaStore(store, config.limitTokens);
+    };
+  },
+};
+
+// ── Pricing factories ────────────────────────────────────────────────────────
+
+/** Runtime context a {@link PricingFactory} thunk receives — the booted application. */
+export type PricingContext = StoreContext;
+
+/** A configured pricing store: a lazy thunk the agent provider calls at boot. */
+export type PricingFactory = (ctx: PricingContext) => AgentPricingStore | Promise<AgentPricingStore>;
+
+/** Options for the Lucid-backed pricing store. */
+export interface LucidPricingConfig {
+  /** Lucid connection name to use. Defaults to the `Database` default connection. */
+  connection?: string;
+}
+
+/**
+ * The pricing factory namespace used in `config/agent.ts`, mirroring {@link stores}:
+ *
+ * ```ts
+ * export default defineConfig({
+ *   pricingStore: pricingStores.lucid(),
+ * })
+ * ```
+ *
+ * Seed model prices once (e.g. in a command) with `seedModelPrices(store, [...])`.
+ */
+export const pricingStores = {
+  /** In-memory pricing table — for tests and the offline demo. */
+  memory(): PricingFactory {
+    return async () => {
+      const { InMemoryPricingStore } = await import('../testing/in-memory-pricing.js');
+      return new InMemoryPricingStore();
+    };
+  },
+
+  /** Persist per-model prices in SQL (the `agent_model_pricing` table) via `@adonisjs/lucid`. */
+  lucid(config: LucidPricingConfig = {}): PricingFactory {
+    return async () => {
+      const db = (await import('@adonisjs/lucid/services/db')).default;
+      const { LucidPricingStore } = await import('./lucid-pricing.js');
+      const client = (config.connection !== undefined
+        ? db.connection(config.connection)
+        : db) as unknown as LucidDatabaseLike;
+      return new LucidPricingStore(client);
+    };
+  },
+};
+
+// ── Retriever factories ──────────────────────────────────────────────────────
+
+/** Runtime context a {@link RetrieverFactory} thunk receives — the booted application. */
+export type RetrieverContext = StoreContext;
+
+/**
+ * A configured retriever: a lazy thunk the agent provider calls at boot to build the {@link Retriever}
+ * wired into inject-mode retrieval. Each factory imports the RAG stack inside the thunk, so nothing is
+ * loaded until a retriever is actually selected — mirroring {@link stores}/{@link quotas}.
+ */
+export type RetrieverFactory = (ctx: RetrieverContext) => Retriever | Promise<Retriever>;
+
+/** A lazy {@link EmbeddingProvider} factory, so an embedding SDK peer imports only when the config loads. */
+export type EmbeddingFactory = () => EmbeddingProvider | Promise<EmbeddingProvider>;
+
+/** Options for the in-memory embedding retriever (cosine over a Map, no infra). */
+export interface MemoryRetrieverConfig {
+  /** The embedding provider (query + ingestion), or a lazy factory so its SDK peer loads lazily. */
+  embedder: EmbeddingProvider | EmbeddingFactory;
+  /** Documents to ingest at boot (chunk → embed → index). Omit to ingest separately at runtime. */
+  documents?: IngestDocument[];
+  /** Target max characters per chunk. Default 800. */
+  chunkSize?: number;
+  /** Characters of overlap between chunks. Default 100. */
+  overlap?: number;
+}
+
+/**
+ * The retriever factory namespace used in `config/agent.ts`, mirroring {@link stores}:
+ *
+ * ```ts
+ * export default defineConfig({
+ *   model: () => aiSdkModel({ model: '...' }),
+ *   retriever: retrievers.memory({ embedder: myEmbedder, documents: [...] }),
+ *   retrievalTopK: 5,
+ * })
+ * ```
+ *
+ * A pgvector/Lucid-backed retriever is deferred; `retrievers.memory` covers tests and small corpora.
+ */
+export const retrievers = {
+  /** In-memory embedding retriever — cosine over a Map, single-process. Handy for tests and dev apps. */
+  memory(config: MemoryRetrieverConfig): RetrieverFactory {
+    return async () => {
+      const { MemoryVectorStore } = await import('../rag/memory-vector-store.js');
+      const { EmbeddingRetriever } = await import('../rag/embedding-retriever.js');
+      const { ingestDocuments } = await import('../rag/ingest.js');
+      const embedder =
+        typeof config.embedder === 'function' ? await config.embedder() : config.embedder;
+      const store = new MemoryVectorStore();
+      if (config.documents !== undefined && config.documents.length > 0) {
+        await ingestDocuments(config.documents, {
+          embedder,
+          store,
+          ...(config.chunkSize !== undefined ? { chunkSize: config.chunkSize } : {}),
+          ...(config.overlap !== undefined ? { overlap: config.overlap } : {}),
+        });
+      }
+      return new EmbeddingRetriever(embedder, store);
     };
   },
 };

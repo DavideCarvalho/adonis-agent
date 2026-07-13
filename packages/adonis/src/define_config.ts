@@ -1,13 +1,25 @@
 import type { BrandedFunctionalTool } from './ai-tool-ref.js';
 import type { ActorResolver } from './spi/actor-resolver.js';
 import type { ModelProvider } from './spi/model-provider.js';
+import type { AgentPricingStore } from './spi/pricing-store.js';
 import type { QuotaStore } from './spi/quota-store.js';
+import type { Retriever } from './spi/retriever.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { TokenStreamSink } from './spi/token-stream-sink.js';
-import { stores } from './stores/factory.js';
+import { pricingStores, quotas, retrievers, stores } from './stores/factory.js';
 import type {
+  EmbeddingFactory,
+  LucidPricingConfig,
   LucidStoreConfig,
+  MemoryRetrieverConfig,
   MemoryStoreConfig,
+  PricingContext,
+  PricingFactory,
+  QuotaConfig,
+  QuotaContext,
+  QuotaFactory,
+  RetrieverContext,
+  RetrieverFactory,
   StoreContext,
   StoreFactory,
 } from './stores/factory.js';
@@ -17,8 +29,6 @@ import type { AgentDefinition } from './types.js';
 export type ModelFactory = () => ModelProvider | Promise<ModelProvider>;
 /** A lazy {@link TokenStreamSink} factory. Omit to use the in-process sink. */
 export type SinkFactory = () => TokenStreamSink | Promise<TokenStreamSink>;
-/** A lazy {@link QuotaStore} factory. Omit to disable quotas (matching the source's default). */
-export type QuotaFactory = () => QuotaStore | Promise<QuotaStore>;
 
 /** The implicit default agent, configured inline — an {@link AgentDefinition} with `name` optional. */
 export type DefaultAgentOptions = Omit<AgentDefinition, 'name'> & { name?: string };
@@ -50,8 +60,28 @@ export interface AgentConfig {
   stores?: Record<string, StoreFactory>;
   /** Live token transport, or a lazy factory. Defaults to the in-process sink. */
   sink?: TokenStreamSink | SinkFactory;
-  /** Daily token budget, or a lazy factory. Omit to disable quotas (fail-open on budget). */
+  /**
+   * Daily token budget, or a lazy factory. Omit to disable quotas (fail-open on budget). Use
+   * `quotas.ledger({ limitTokens })` to enforce off the persisted token-usage ledger, or
+   * `quotas.memory({ limitTokens })` for a single-process budget.
+   */
   quota?: QuotaStore | QuotaFactory;
+  /**
+   * Prices each turn's tokens into the assistant message's `usage.costUsd`. A provider-reported cost
+   * (a gateway) always wins; otherwise the loop estimates from this store's current price rows (fetched
+   * once per run). Omit → `costUsd` is always `null` (never a fabricated `0`). Use
+   * `pricingStores.lucid()` for the SQL-backed table or `pricingStores.memory()` for tests.
+   */
+  pricingStore?: AgentPricingStore | PricingFactory;
+  /**
+   * Enables always-on ("inject") RAG: before each turn the loop retrieves passages for the user message
+   * and folds them into the system prompt (replay-safe under durable). Pass a {@link Retriever} directly
+   * or a lazy factory — `retrievers.memory({ embedder, documents })` for the in-memory cosine store.
+   * Omit → no injection. A pgvector/Lucid-backed retriever is deferred.
+   */
+  retriever?: Retriever | RetrieverFactory;
+  /** How many passages inject-mode retrieval requests per run. Default 5. */
+  retrievalTopK?: number;
   /**
    * Tool authorization gate. Defaults to `DefaultToolAuthorizer` (fail-closed, ADMIN-only; role-set
    * intersection). `authorizer` and `rolesPolicy` are aliases — pass either.
@@ -69,8 +99,12 @@ export interface AgentConfig {
   /** Route prefix the `/agent/*` routes mount under. Defaults to `'agent'`. */
   path?: string;
   /**
-   * Run each turn as a durable workflow instead of in-process. DEFERRED — not yet supported; setting
-   * it logs a warning and falls back to the in-process (inline) runner.
+   * Run each turn as a replay-safe durable workflow (over `@adonis-agora/durable`) instead of
+   * in-process: LLM turns / tool executions become memoized durable steps, HITL approval suspends the
+   * run on a signal (resuming across a restart), and sub-agent delegation is a tracked child run. Opt
+   * in with `true` — requires `@adonis-agora/durable` installed and configured (`config/durable.ts`).
+   * If the durable peer can't be wired, the provider logs a warning and falls back to the in-process
+   * (inline) runner, so setting it is always safe.
    */
   durable?: boolean;
   /** Additional named agents (an orchestrator delegates to them via `delegatesTo`). */
@@ -90,5 +124,20 @@ export function defineConfig(config: AgentConfig): AgentConfig {
   return config;
 }
 
-export { stores };
-export type { StoreContext, StoreFactory, LucidStoreConfig, MemoryStoreConfig };
+export { stores, quotas, pricingStores, retrievers };
+export type {
+  StoreContext,
+  StoreFactory,
+  LucidStoreConfig,
+  MemoryStoreConfig,
+  QuotaContext,
+  QuotaFactory,
+  QuotaConfig,
+  PricingContext,
+  PricingFactory,
+  LucidPricingConfig,
+  RetrieverContext,
+  RetrieverFactory,
+  MemoryRetrieverConfig,
+  EmbeddingFactory,
+};

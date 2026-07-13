@@ -5,7 +5,9 @@ import {
   type ActorResolver,
   type AgentConfig,
   AgentDepsFactory,
+  type AgentPricingStore,
   AgentRegistry,
+  type AgentRunner,
   AgentService,
   type AgentStore,
   DefaultToolAuthorizer,
@@ -14,6 +16,7 @@ import {
   type ModelProvider,
   type PageContext,
   type QuotaStore,
+  type Retriever,
   type RolesPolicy,
   type TokenStreamSink,
   ToolRegistry,
@@ -92,18 +95,14 @@ export default class AgentProvider {
     const model = await this.#resolveModel(config);
     const store = await this.#resolveStore(config);
     const sink = await this.#resolveSink(config);
-    const quota = await this.#resolveQuota(config);
+    // Quota is resolved after the store so a ledger-backed quota can read the store's usage ledger.
+    const quota = await this.#resolveQuota(config, store);
+    const pricingStore = await this.#resolvePricing(config);
+    const retriever = await this.#resolveRetriever(config);
     const authorizer = this.#resolveAuthorizer(config, defaultRoles);
     const actorResolver = config.actorResolver ?? new UnconfiguredActorResolver();
     this.#store = store;
     this.#sink = sink;
-
-    if (config.durable === true) {
-      console.warn(
-        '[@adonis-agora/agent] `durable: true` is not yet supported (the durable runner is deferred) — ' +
-          'falling back to the in-process (inline) runner.',
-      );
-    }
 
     const factory = new AgentDepsFactory({
       model,
@@ -114,8 +113,16 @@ export default class AgentProvider {
       agents,
       defaultAgentName: config.defaultAgent?.name ?? 'default',
       ...(quota !== undefined ? { quota } : {}),
+      ...(pricingStore !== undefined ? { pricingStore } : {}),
+      ...(retriever !== undefined ? { retriever } : {}),
+      ...(config.retrievalTopK !== undefined ? { retrievalTopK: config.retrievalTopK } : {}),
     });
-    const runner = new InlineAgentRunner(factory, store);
+    // `durable: true` runs each turn as a replay-safe `@adonis-agora/durable` workflow; it degrades
+    // gracefully to the in-process runner when the durable peer isn't installed/configured.
+    const runner =
+      config.durable === true
+        ? ((await this.#resolveDurableRunner(factory, store)) ?? new InlineAgentRunner(factory, store))
+        : new InlineAgentRunner(factory, store);
     const service = new AgentService(runner, store, factory);
     this.app.container.bindValue(AgentService, service);
 
@@ -154,14 +161,59 @@ export default class AgentProvider {
     return typeof sink === 'function' ? sink() : sink;
   }
 
-  async #resolveQuota(config: AgentConfig): Promise<QuotaStore | undefined> {
+  async #resolveQuota(config: AgentConfig, store: AgentStore): Promise<QuotaStore | undefined> {
     const quota = config.quota;
     if (quota === undefined) return undefined;
-    return typeof quota === 'function' ? quota() : quota;
+    return typeof quota === 'function' ? quota({ app: this.app, store }) : quota;
+  }
+
+  async #resolvePricing(config: AgentConfig): Promise<AgentPricingStore | undefined> {
+    const pricingStore = config.pricingStore;
+    if (pricingStore === undefined) return undefined;
+    return typeof pricingStore === 'function' ? pricingStore({ app: this.app }) : pricingStore;
+  }
+
+  /** Build the inject-mode retriever from config (a `RetrieverFactory` thunk or a ready instance). */
+  async #resolveRetriever(config: AgentConfig): Promise<Retriever | undefined> {
+    const retriever = config.retriever;
+    if (retriever === undefined) return undefined;
+    return typeof retriever === 'function' ? retriever({ app: this.app }) : retriever;
   }
 
   #resolveAuthorizer(config: AgentConfig, defaultRoles: string[]): RolesPolicy {
     return config.authorizer ?? config.rolesPolicy ?? new DefaultToolAuthorizer(defaultRoles);
+  }
+
+  /**
+   * Build the durable runner when `durable: true`, or `null` to fall back to inline. The optional
+   * `@adonis-agora/durable` peer is imported lazily (so the agent package never hard-depends on it),
+   * its {@link WorkflowEngine} resolved from the container (bound by the durable provider), the agent
+   * workflow registered on it, and the module-level durable context wired. A missing peer, an
+   * unresolvable engine, or any wiring error logs a warning and degrades to the in-process runner
+   * rather than breaking boot.
+   */
+  async #resolveDurableRunner(
+    factory: AgentDepsFactory,
+    store: AgentStore,
+  ): Promise<AgentRunner | null> {
+    try {
+      const durable = await import('@adonis-agora/durable');
+      const engine = await this.app.container.make(durable.WorkflowEngine);
+      const { DurableAgentRunner, registerAgentWorkflow, setDurableAgentContext } = await import(
+        '../src/durable/index.js'
+      );
+      setDurableAgentContext({ factory, store });
+      registerAgentWorkflow(engine);
+      return new DurableAgentRunner(engine);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        '[@adonis-agora/agent] `durable: true` was requested but the durable runner could not be ' +
+          `wired (${message}) — is \`@adonis-agora/durable\` installed and configured? ` +
+          'Falling back to the in-process (inline) runner.',
+      );
+      return null;
+    }
   }
 
   /** Best-effort import of the build-time tools barrel; `null` when absent (fall back to the scan). */

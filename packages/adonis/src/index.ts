@@ -7,9 +7,14 @@ export * from './spi/token-stream-sink.js';
 export * from './spi/agent-store.js';
 export * from './spi/roles-policy.js';
 export * from './spi/quota-store.js';
+export * from './spi/pricing-store.js';
 export * from './spi/agent-runner.js';
 export * from './spi/actor-resolver.js';
 export * from './spi/governance-queries.js';
+export * from './spi/embedding-provider.js';
+export * from './spi/retriever.js';
+export * from './spi/reranker.js';
+export * from './rag/index.js';
 export * from './personas.js';
 export { AgentRegistry } from './agent-registry.js';
 export {
@@ -28,13 +33,22 @@ export {
 export * from './diagnostics.js';
 
 // ── Wave 2: Adonis integration shell ─────────────────────────────────────────
-export { defineConfig, stores } from './define_config.js';
+export { defineConfig, stores, quotas, pricingStores, retrievers } from './define_config.js';
 export type {
   AgentConfig,
   DefaultAgentOptions,
   ModelFactory,
   SinkFactory,
   QuotaFactory,
+  QuotaContext,
+  QuotaConfig,
+  PricingFactory,
+  PricingContext,
+  LucidPricingConfig,
+  RetrieverContext,
+  RetrieverFactory,
+  MemoryRetrieverConfig,
+  EmbeddingFactory,
   StoreContext,
   StoreFactory,
   LucidStoreConfig,
@@ -87,3 +101,5 @@ export type {
   LucidInsertBuilderLike,
 } from './stores/lucid.js';
 export { createTableStatements, createAgentTables, AGENT_TABLES } from './stores/lucid-schema.js';
+export { LedgerQuotaStore } from './stores/ledger-quota.js';
+export { LucidPricingStore } from './stores/lucid-pricing.js';

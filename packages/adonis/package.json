@@ -28,6 +28,11 @@
       "import": "./dist/src/testing/index.js",
       "default": "./dist/src/testing/index.js"
     },
+    "./durable": {
+      "types": "./dist/src/durable/index.d.ts",
+      "import": "./dist/src/durable/index.js",
+      "default": "./dist/src/durable/index.js"
+    },
     "./types": {
       "types": "./dist/src/types.d.ts",
       "import": "./dist/src/types.js",

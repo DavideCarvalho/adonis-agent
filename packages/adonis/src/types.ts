@@ -88,6 +88,14 @@ export interface MessageUsage {
    * non-reasoning models or providers that don't report it.
    */
   reasoningTokens?: number;
+  /**
+   * This turn's USD cost: the provider's own reported figure when it has one (a gateway), else an
+   * estimate from the bound `AgentPricingStore` (cached once per run — see `AgentLoopDeps.pricingStore`),
+   * else `null` when no pricing store is bound or the model has no price row. Never `0` for an unpriced
+   * model — a real $0 turn and "we don't know" must stay distinguishable. Undefined before the loop
+   * folds cost (e.g. a plain usage struct that predates pricing).
+   */
+  costUsd?: number | null;
 }
 
 export type UsagePurpose = 'chat' | 'title' | 'follow_ups' | 'summary';

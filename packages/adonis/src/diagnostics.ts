@@ -47,6 +47,12 @@ export interface AgentDelegated {
   fromAgent?: string;
   toAgent: string;
 }
+export interface AgentRetrieved {
+  runId: string;
+  /** Length of the query (not the text) — same redaction posture as {@link AgentMessageEvent}. */
+  queryLength: number;
+  count: number;
+}
 
 /** Maps each event name to its payload type, so {@link publishAgent} is checked at the call site. */
 export interface AgentDiagnosticPayloads {
@@ -56,6 +62,7 @@ export interface AgentDiagnosticPayloads {
   'quota.exceeded': AgentQuotaExceeded;
   'run.finished': AgentRunFinished;
   delegated: AgentDelegated;
+  retrieved: AgentRetrieved;
 }
 
 export type AgentDiagnosticEvent = keyof AgentDiagnosticPayloads;
@@ -95,4 +102,7 @@ export function publishAgentRunFinished(payload: AgentRunFinished): void {
 }
 export function publishAgentDelegated(payload: AgentDelegated): void {
   publishAgent('delegated', payload);
+}
+export function publishAgentRetrieved(payload: AgentRetrieved): void {
+  publishAgent('retrieved', payload);
 }
