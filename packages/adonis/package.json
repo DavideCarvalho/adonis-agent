@@ -53,6 +53,11 @@
       "import": "./dist/src/stores/lucid.js",
       "default": "./dist/src/stores/lucid.js"
     },
+    "./data": {
+      "types": "./dist/src/data/index.d.ts",
+      "import": "./dist/src/data/index.js",
+      "default": "./dist/src/data/index.js"
+    },
     "./hooks/tools": {
       "types": "./dist/src/hooks/tools.d.ts",
       "import": "./dist/src/hooks/tools.js",
@@ -78,9 +83,13 @@
     "@adonis-agora/durable": "^0.7.0",
     "@adonis-agora/diagnostics": "^0.1.0",
     "ai": "^7.0.0",
+    "node-sql-parser": "^5.3.0",
     "zod": "^3.23.0 || ^4.0.0"
   },
   "peerDependenciesMeta": {
+    "node-sql-parser": {
+      "optional": true
+    },
     "@adonisjs/assembler": {
       "optional": true
     },
@@ -111,6 +120,7 @@
     "ai": "^7.0.0",
     "better-sqlite3": "^11.0.0",
     "luxon": "^3.4.0",
+    "node-sql-parser": "^5.3.0",
     "typescript": "^5.4.0",
     "vitest": "^3.0.0",
     "zod": "^3.25.0"

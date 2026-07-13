@@ -129,3 +129,24 @@ export { createTableStatements, createAgentTables, AGENT_TABLES } from './stores
 export { LedgerQuotaStore } from './stores/ledger-quota.js';
 export { LucidPricingStore } from './stores/lucid-pricing.js';
 export { LucidGovernanceQueries } from './stores/lucid-governance-queries.js';
+
+// ── Data satellite: governed read-only SQL tool ──────────────────────────────
+export {
+  dataTool,
+  SqlValidator,
+  SqlValidationError,
+  GroupTableAccessPolicy,
+  TenantScopeRewriter,
+  injectLimit,
+  loadSqlParser,
+} from './data/index.js';
+export type {
+  DataToolConfig,
+  DataToolResult,
+  QueryRunner,
+  SqlValidationResult,
+  TableAccessPolicy,
+  GroupTableAccessConfig,
+  TenantScopeConfig,
+  SqlParserLike,
+} from './data/index.js';
