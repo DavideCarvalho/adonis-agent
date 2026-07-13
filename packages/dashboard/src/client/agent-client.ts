@@ -2,10 +2,18 @@ import { resolveApiBase } from './api-base.js';
 import type {
   ActorSpendRow,
   GovernanceRange,
+  ListRunsFilter,
+  ListRunsResult,
   ModelSpendRow,
+  PendingApprovalRow,
+  PendingApprovalsFilter,
+  PerToolStatRow,
   QuotaToday,
+  RunDetail,
+  RunReliability,
   ThreadActivityRow,
   ToolCallActivityRow,
+  ToolStatsRange,
   UsageTrendPoint,
 } from './types.js';
 
@@ -62,6 +70,19 @@ export class AgentClient {
     return (await response.json()) as T;
   }
 
+  private async post<T>(path: string, body: unknown): Promise<T> {
+    const response = await this.doFetch(`${this.base}${path}`, {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      throw new AgentApiError(`POST ${path} failed (${response.status})`, response.status);
+    }
+    return (await response.json()) as T;
+  }
+
   spendByModel(range: GovernanceRange): Promise<ModelSpendRow[]> {
     return this.get<ModelSpendRow[]>('/governance/spend/model', {
       from: range.fromDay,
@@ -95,5 +116,63 @@ export class AgentClient {
 
   quotaToday(): Promise<QuotaToday> {
     return this.get<QuotaToday>('/quota/today');
+  }
+
+  // ── Run lifecycle governance (the run-tracking read-model). ─────────────────
+
+  /** `GET /agent/governance/runs` — filterable, cursor-paginated run list, newest-first. */
+  listRuns(filter: ListRunsFilter = {}): Promise<ListRunsResult> {
+    const query: Record<string, string> = { limit: String(filter.limit ?? this.limit) };
+    if (filter.actor) query.actor = filter.actor;
+    if (filter.agent) query.agent = filter.agent;
+    if (filter.status) query.status = filter.status;
+    if (filter.from) query.from = filter.from;
+    if (filter.to) query.to = filter.to;
+    if (filter.cursor) query.cursor = filter.cursor;
+    return this.get<ListRunsResult>('/governance/runs', query);
+  }
+
+  /** `GET /agent/governance/runs/:id` — one run's full trace, or `null` if unknown. */
+  runDetail(runId: string): Promise<RunDetail | null> {
+    return this.get<RunDetail | null>(`/governance/runs/${encodeURIComponent(runId)}`);
+  }
+
+  /** `GET /agent/governance/approvals/pending` — cross-thread HITL inbox, oldest first. */
+  pendingApprovals(filter: PendingApprovalsFilter = {}): Promise<PendingApprovalRow[]> {
+    const query: Record<string, string> = { limit: String(filter.limit ?? this.limit) };
+    if (filter.actor) query.actor = filter.actor;
+    return this.get<PendingApprovalRow[]>('/governance/approvals/pending', query);
+  }
+
+  /** `GET /agent/governance/tools/stats` — per-tool call/failure/rejection/latency rollup. */
+  perToolStats(range: ToolStatsRange = {}): Promise<PerToolStatRow[]> {
+    const query: Record<string, string> = {};
+    if (range.from) query.from = range.from;
+    if (range.to) query.to = range.to;
+    return this.get<PerToolStatRow[]>('/governance/tools/stats', query);
+  }
+
+  /** `GET /agent/governance/reliability` — success/failure/cancel rates + mean settled duration. */
+  runReliability(range: ToolStatsRange = {}): Promise<RunReliability> {
+    const query: Record<string, string> = {};
+    if (range.from) query.from = range.from;
+    if (range.to) query.to = range.to;
+    return this.get<RunReliability>('/governance/reliability', query);
+  }
+
+  // ── HITL decisions — the EXISTING mutating routes the approvals inbox wires to. ──
+
+  /** `POST /agent/tool-call/approve` — release a `pending_approval` tool call. */
+  approveToolCall(runId: string, toolCallId: string): Promise<{ ok: boolean }> {
+    return this.post<{ ok: boolean }>('/tool-call/approve', { runId, toolCallId });
+  }
+
+  /** `POST /agent/tool-call/reject` — deny a `pending_approval` tool call, with an optional reason. */
+  rejectToolCall(runId: string, toolCallId: string, reason?: string): Promise<{ ok: boolean }> {
+    return this.post<{ ok: boolean }>('/tool-call/reject', {
+      runId,
+      toolCallId,
+      ...(reason ? { reason } : {}),
+    });
   }
 }

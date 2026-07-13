@@ -1,6 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { AgentClient } from '../client/agent-client.js';
-import type { GovernanceRange } from '../client/types.js';
+import type {
+  GovernanceRange,
+  ListRunsFilter,
+  RunSummaryRow,
+  ToolStatsRange,
+} from '../client/types.js';
 
 /**
  * The {@link AgentClient} the hooks call, provided at the app root. A default instance (deriving its
@@ -99,4 +104,117 @@ export function useRecentToolCalls(limit = 20) {
 export function useQuotaToday() {
   const client = useAgentClient();
   return useAsync(() => client.quotaToday(), [client]);
+}
+
+/** Serialize a runs filter (minus its cursor) into a stable dep key. */
+function runsFilterKey(filter: ListRunsFilter): string {
+  return [
+    filter.actor ?? '',
+    filter.agent ?? '',
+    filter.status ?? '',
+    filter.from ?? '',
+    filter.to ?? '',
+  ].join('|');
+}
+
+/** The state of a cursor-paginated, filterable run list. */
+export interface RunsState {
+  runs: RunSummaryRow[];
+  /** Cursor for the next page; `null` when the last page has been loaded. */
+  nextCursor: string | null;
+  loading: boolean;
+  error: Error | null;
+  /** Fetch and append the next page (no-op once `nextCursor` is `null`). */
+  loadMore: () => void;
+}
+
+/**
+ * Runs list with forward pagination: (re)loads the first page whenever the filter changes and
+ * accumulates subsequent pages via {@link RunsState.loadMore}. Uses a monotonic generation token so a
+ * stale in-flight page from a superseded filter is discarded (last-write-wins), mirroring
+ * {@link useAsync}. The cursor is tracked in a ref so `loadMore` always fires against the freshest page.
+ */
+export function useRuns(filter: ListRunsFilter): RunsState {
+  const client = useAgentClient();
+  const key = runsFilterKey(filter);
+  const filterRef = useRef(filter);
+  filterRef.current = filter;
+
+  const [runs, setRuns] = useState<RunSummaryRow[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+  const cursorRef = useRef<string | null>(null);
+  const genRef = useRef(0);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the serialized filter key is the trigger.
+  useEffect(() => {
+    const gen = ++genRef.current;
+    setRuns([]);
+    setNextCursor(null);
+    cursorRef.current = null;
+    setLoading(true);
+    setError(null);
+    client
+      .listRuns(filterRef.current)
+      .then((page) => {
+        if (genRef.current !== gen) return;
+        setRuns(page.runs);
+        setNextCursor(page.nextCursor);
+        cursorRef.current = page.nextCursor;
+        setLoading(false);
+      })
+      .catch((err: unknown) => {
+        if (genRef.current !== gen) return;
+        setError(err instanceof Error ? err : new Error(String(err)));
+        setLoading(false);
+      });
+  }, [client, key]);
+
+  const loadMore = useCallback(() => {
+    const cursor = cursorRef.current;
+    if (cursor === null) return;
+    const gen = genRef.current;
+    cursorRef.current = null; // guard against double-fire while this page is in flight
+    setLoading(true);
+    client
+      .listRuns({ ...filterRef.current, cursor })
+      .then((page) => {
+        if (genRef.current !== gen) return;
+        setRuns((prev) => [...prev, ...page.runs]);
+        setNextCursor(page.nextCursor);
+        cursorRef.current = page.nextCursor;
+        setLoading(false);
+      })
+      .catch((err: unknown) => {
+        if (genRef.current !== gen) return;
+        setError(err instanceof Error ? err : new Error(String(err)));
+        setLoading(false);
+      });
+  }, [client]);
+
+  return { runs, nextCursor, loading, error, loadMore };
+}
+
+export function useRunDetail(runId: string) {
+  const client = useAgentClient();
+  return useAsync(() => client.runDetail(runId), [client, runId]);
+}
+
+export function usePendingApprovals(filter: { actor?: string; limit?: number } = {}) {
+  const client = useAgentClient();
+  return useAsync(
+    () => client.pendingApprovals(filter),
+    [client, filter.actor ?? '', filter.limit ?? 0],
+  );
+}
+
+export function useToolStats(range: ToolStatsRange = {}) {
+  const client = useAgentClient();
+  return useAsync(() => client.perToolStats(range), [client, range.from ?? '', range.to ?? '']);
+}
+
+export function useReliability(range: ToolStatsRange = {}) {
+  const client = useAgentClient();
+  return useAsync(() => client.runReliability(range), [client, range.from ?? '', range.to ?? '']);
 }

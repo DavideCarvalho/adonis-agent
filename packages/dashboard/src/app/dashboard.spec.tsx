@@ -1,17 +1,28 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { type ReactNode, StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentClient } from '../client/agent-client.js';
 import type {
   ActorSpendRow,
+  ListRunsResult,
   ModelSpendRow,
+  PendingApprovalRow,
+  PerToolStatRow,
+  RunDetail,
+  RunReliability,
+  RunSummaryRow,
   ThreadActivityRow,
   ToolCallActivityRow,
   UsageTrendPoint,
 } from '../client/types.js';
+import { ApprovalsSection } from './ApprovalsSection.js';
 import { Overview } from './Overview.js';
+import { ReliabilitySection } from './ReliabilitySection.js';
+import { RunDetailView } from './RunDetailView.js';
+import { RunsSection } from './RunsSection.js';
 import { ThreadsSection } from './ThreadsSection.js';
 import { ToolCallsSection } from './ToolCallsSection.js';
+import { ToolsSection } from './ToolsSection.js';
 import { AgentClientContext } from './use-governance.js';
 
 const RANGE = { fromDay: '2026-03-01', toDay: '2026-03-07' };
@@ -55,6 +66,101 @@ const toolCallRows: ToolCallActivityRow[] = [
   },
 ];
 
+const runRows: RunSummaryRow[] = [
+  {
+    runId: 'run-abc12345',
+    threadId: 'thread-abc12345',
+    actorRef: 'user:alice',
+    tenantRef: null,
+    agentName: 'support',
+    status: 'completed',
+    startedAt: '2026-03-07T10:00:00.000Z',
+    finishedAt: '2026-03-07T10:00:05.000Z',
+    durationMs: 5000,
+    stepCount: 3,
+    inputTokens: 1200,
+    outputTokens: 300,
+    costUsd: 0.42,
+    error: null,
+    durable: true,
+  },
+];
+const runDetail: RunDetail = {
+  run: runRows[0]!,
+  messages: [
+    {
+      id: 'm1',
+      role: 'user',
+      content: 'Where is my order?',
+      createdAt: '2026-03-07T10:00:00.000Z',
+    },
+  ],
+  toolCalls: [
+    {
+      toolCallId: 'tc1',
+      toolName: 'search_orders',
+      toolType: 'function',
+      status: 'completed',
+      input: { q: 'order' },
+      output: { found: true },
+      error: null,
+      executionMs: 120,
+      createdAt: '2026-03-07T10:00:01.000Z',
+    },
+  ],
+  approvals: [],
+  usage: [
+    {
+      modelId: 'gpt-4o',
+      purpose: 'chat',
+      inputTokens: 1200,
+      outputTokens: 300,
+      costUsd: 0.42,
+      createdAt: '2026-03-07T10:00:02.000Z',
+    },
+  ],
+};
+const pendingRows: PendingApprovalRow[] = [
+  {
+    toolCallId: 'call-1',
+    toolName: 'refund_order',
+    input: { orderId: 'o-9' },
+    threadId: 'thread-abc12345',
+    runId: 'run-1',
+    actorRef: 'user:alice',
+    requestedAt: '2026-03-07T10:05:00.000Z',
+  },
+];
+const toolStatRows: PerToolStatRow[] = [
+  {
+    toolName: 'search_orders',
+    toolType: 'function',
+    calls: 40,
+    failed: 2,
+    rejected: 0,
+    avgDurationMs: 130,
+  },
+  {
+    toolName: 'refund_order',
+    toolType: 'function',
+    calls: 8,
+    failed: 1,
+    rejected: 3,
+    avgDurationMs: 900,
+  },
+];
+const reliability: RunReliability = {
+  runs: 100,
+  completed: 82,
+  failed: 10,
+  cancelled: 5,
+  running: 3,
+  successRate: 0.82,
+  failureRate: 0.1,
+  cancelRate: 0.05,
+  avgDurationMs: 4200,
+};
+
 function fakeClient(overrides: Partial<AgentClient> = {}): AgentClient {
   return {
     spendByModel: vi.fn().mockResolvedValue(modelRows),
@@ -63,6 +169,13 @@ function fakeClient(overrides: Partial<AgentClient> = {}): AgentClient {
     recentThreads: vi.fn().mockResolvedValue(threadRows),
     recentToolCalls: vi.fn().mockResolvedValue(toolCallRows),
     quotaToday: vi.fn().mockResolvedValue({ usedTokens: 123 }),
+    listRuns: vi.fn().mockResolvedValue({ runs: runRows, nextCursor: null } as ListRunsResult),
+    runDetail: vi.fn().mockResolvedValue(runDetail),
+    pendingApprovals: vi.fn().mockResolvedValue(pendingRows),
+    perToolStats: vi.fn().mockResolvedValue(toolStatRows),
+    runReliability: vi.fn().mockResolvedValue(reliability),
+    approveToolCall: vi.fn().mockResolvedValue({ ok: true }),
+    rejectToolCall: vi.fn().mockResolvedValue({ ok: true }),
     ...overrides,
   } as unknown as AgentClient;
 }
@@ -135,5 +248,159 @@ describe('ToolCallsSection', () => {
     await waitFor(() => expect(screen.getByText('search_orders')).toBeTruthy());
     expect(screen.getByText('completed')).toBeTruthy();
     expect(client.recentToolCalls).toHaveBeenCalled();
+  });
+});
+
+describe('RunsSection', () => {
+  it('lists runs from governance/runs and opens a run detail on row click', async () => {
+    const client = fakeClient();
+    renderWith(client, <RunsSection />);
+
+    await waitFor(() => expect(screen.getByText('support')).toBeTruthy());
+    expect(client.listRuns).toHaveBeenCalled();
+
+    // Click the run row → the detail trace assembles (messages + tool calls + usage).
+    fireEvent.click(screen.getByText('run-abc1…'));
+    await waitFor(() => expect(screen.getByText('Where is my order?')).toBeTruthy());
+    expect(client.runDetail).toHaveBeenCalledWith('run-abc12345');
+    expect(screen.getByText('← Back to runs')).toBeTruthy();
+  });
+
+  it('re-queries with the status filter', async () => {
+    const client = fakeClient();
+    renderWith(client, <RunsSection />);
+    await waitFor(() => expect(screen.getByText('support')).toBeTruthy());
+
+    fireEvent.change(screen.getByLabelText('status filter'), { target: { value: 'failed' } });
+    await waitFor(() =>
+      expect(client.listRuns).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' })),
+    );
+  });
+
+  it('paginates by appending the next page from nextCursor', async () => {
+    const page2Run: RunSummaryRow = { ...runRows[0]!, runId: 'run-def67890', agentName: 'billing' };
+    const listRuns = vi
+      .fn()
+      .mockImplementation((filter?: { cursor?: string }) =>
+        Promise.resolve(
+          filter?.cursor
+            ? ({ runs: [page2Run], nextCursor: null } as ListRunsResult)
+            : ({ runs: runRows, nextCursor: 'cursor-1' } as ListRunsResult),
+        ),
+      );
+    const client = fakeClient({ listRuns } as Partial<AgentClient>);
+    renderWith(client, <RunsSection />);
+
+    await waitFor(() => expect(screen.getByText('support')).toBeTruthy());
+    fireEvent.click(screen.getByText('Load more'));
+    await waitFor(() => expect(screen.getByText('billing')).toBeTruthy());
+    // Both pages are now on screen.
+    expect(screen.getByText('support')).toBeTruthy();
+  });
+});
+
+describe('RunDetailView', () => {
+  it('assembles the run summary, messages, tool calls and usage', async () => {
+    const client = fakeClient();
+    renderWith(client, <RunDetailView runId="run-abc12345" onBack={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText('Where is my order?')).toBeTruthy());
+    expect(client.runDetail).toHaveBeenCalledWith('run-abc12345');
+    // tool call + usage rows.
+    expect(screen.getByText('search_orders')).toBeTruthy();
+    expect(screen.getByText('chat')).toBeTruthy();
+    expect(screen.getByText('Tool calls')).toBeTruthy();
+    expect(screen.getByText('Usage')).toBeTruthy();
+  });
+
+  it('shows an empty state when the run is unknown', async () => {
+    const client = fakeClient({
+      runDetail: vi.fn().mockResolvedValue(null),
+    } as Partial<AgentClient>);
+    renderWith(client, <RunDetailView runId="nope" onBack={() => {}} />);
+    await waitFor(() => expect(screen.getByText('Run not found.')).toBeTruthy());
+  });
+});
+
+describe('ApprovalsSection', () => {
+  it('lists pending approvals and fires approve against the real route', async () => {
+    const client = fakeClient();
+    renderWith(client, <ApprovalsSection />);
+
+    await waitFor(() => expect(screen.getByText('refund_order')).toBeTruthy());
+    expect(client.pendingApprovals).toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('Approve'));
+    await waitFor(() => expect(client.approveToolCall).toHaveBeenCalledWith('run-1', 'call-1'));
+  });
+
+  it('fires reject against the real route', async () => {
+    const client = fakeClient();
+    renderWith(client, <ApprovalsSection />);
+    await waitFor(() => expect(screen.getByText('refund_order')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('Reject'));
+    await waitFor(() => expect(client.rejectToolCall).toHaveBeenCalledWith('run-1', 'call-1'));
+  });
+
+  it('shows an empty inbox state', async () => {
+    const client = fakeClient({
+      pendingApprovals: vi.fn().mockResolvedValue([]),
+    } as Partial<AgentClient>);
+    renderWith(client, <ApprovalsSection />);
+    await waitFor(() => expect(screen.getByText('No tool calls awaiting approval.')).toBeTruthy());
+  });
+});
+
+describe('ToolsSection', () => {
+  it('renders the per-tool stats and re-sorts on a header click', async () => {
+    const client = fakeClient();
+    renderWith(client, <ToolsSection />);
+
+    await waitFor(() => expect(screen.getByText('search_orders')).toBeTruthy());
+    expect(client.perToolStats).toHaveBeenCalled();
+
+    // Default sort is calls desc → search_orders (40) before refund_order (8).
+    const firstToolBefore = screen.getAllByRole('row')[1]?.textContent ?? '';
+    expect(firstToolBefore).toContain('search_orders');
+
+    // Sort by rejected desc → refund_order (3) rises to the top.
+    fireEvent.click(screen.getByText(/^Rejected/));
+    await waitFor(() => {
+      const firstTool = screen.getAllByRole('row')[1]?.textContent ?? '';
+      expect(firstTool).toContain('refund_order');
+    });
+  });
+});
+
+describe('ReliabilitySection', () => {
+  it('renders the success/failure/cancel rates from governance/reliability', async () => {
+    const client = fakeClient();
+    renderWith(client, <ReliabilitySection />);
+
+    await waitFor(() => expect(screen.getByText('Success rate')).toBeTruthy());
+    expect(client.runReliability).toHaveBeenCalled();
+    // Rate appears in both the stat card and the rates table.
+    expect(screen.getAllByText('82%').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('10%').length).toBeGreaterThan(0);
+    expect(screen.getByText('5%')).toBeTruthy();
+  });
+
+  it('shows an empty state when there are no runs', async () => {
+    const client = fakeClient({
+      runReliability: vi.fn().mockResolvedValue({
+        runs: 0,
+        completed: 0,
+        failed: 0,
+        cancelled: 0,
+        running: 0,
+        successRate: 0,
+        failureRate: 0,
+        cancelRate: 0,
+        avgDurationMs: null,
+      } as RunReliability),
+    } as Partial<AgentClient>);
+    renderWith(client, <ReliabilitySection />);
+    await waitFor(() => expect(screen.getByText('No runs recorded yet.')).toBeTruthy());
   });
 });

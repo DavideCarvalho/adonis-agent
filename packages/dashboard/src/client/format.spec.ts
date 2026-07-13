@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatCount,
+  formatDuration,
   formatModelLabel,
   formatPercent,
   formatTimestamp,
@@ -35,6 +36,20 @@ describe('formatPercent', () => {
   it('rounds a ratio to an integer percent', () => {
     expect(formatPercent(0.1234)).toBe('12%');
     expect(formatPercent(1)).toBe('100%');
+  });
+});
+
+describe('formatDuration', () => {
+  it('scales ms → s → m → h', () => {
+    expect(formatDuration(820)).toBe('820ms');
+    expect(formatDuration(3400)).toBe('3.4s');
+    expect(formatDuration(126_000)).toBe('2.1m');
+    expect(formatDuration(4_680_000)).toBe('1.3h');
+  });
+  it('renders — for null/undefined/non-finite', () => {
+    expect(formatDuration(null)).toBe('—');
+    expect(formatDuration(undefined)).toBe('—');
+    expect(formatDuration(Number.NaN)).toBe('—');
   });
 });
 

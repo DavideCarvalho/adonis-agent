@@ -1,17 +1,33 @@
 import { useEffect, useState } from 'react';
 import { defaultRange, isIsoDay, normalizeRange } from '../client/default-range.js';
 import type { GovernanceRange } from '../client/types.js';
+import { ApprovalsSection } from './ApprovalsSection.js';
 import { Overview } from './Overview.js';
 import { QuotaSection } from './QuotaSection.js';
+import { ReliabilitySection } from './ReliabilitySection.js';
+import { RunsSection } from './RunsSection.js';
 import { ThreadsSection } from './ThreadsSection.js';
 import { ToolCallsSection } from './ToolCallsSection.js';
+import { ToolsSection } from './ToolsSection.js';
 
-type SectionKey = 'overview' | 'threads' | 'tools' | 'quota';
+type SectionKey =
+  | 'overview'
+  | 'runs'
+  | 'threads'
+  | 'tools'
+  | 'approvals'
+  | 'toolstats'
+  | 'reliability'
+  | 'quota';
 
 const SECTIONS: { key: SectionKey; label: string }[] = [
   { key: 'overview', label: 'Overview' },
+  { key: 'runs', label: 'Runs' },
   { key: 'threads', label: 'Threads' },
   { key: 'tools', label: 'Tool calls' },
+  { key: 'approvals', label: 'Approvals' },
+  { key: 'toolstats', label: 'Tools' },
+  { key: 'reliability', label: 'Reliability' },
   { key: 'quota', label: 'Quota' },
 ];
 
@@ -110,8 +126,12 @@ export function App() {
 
         <main>
           {section === 'overview' && <Overview range={range} />}
+          {section === 'runs' && <RunsSection />}
           {section === 'threads' && <ThreadsSection />}
           {section === 'tools' && <ToolCallsSection />}
+          {section === 'approvals' && <ApprovalsSection />}
+          {section === 'toolstats' && <ToolsSection />}
+          {section === 'reliability' && <ReliabilitySection />}
           {section === 'quota' && <QuotaSection />}
         </main>
 

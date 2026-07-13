@@ -363,6 +363,7 @@ body {
 }
 .s-running,
 .s-pending,
+.s-pending_approval,
 .s-awaiting_approval {
   color: var(--info);
 }
@@ -371,6 +372,92 @@ body {
 .s-rejected,
 .s-forbidden {
   color: var(--bad);
+}
+.s-cancelled,
+.s-canceled {
+  color: var(--warn);
+}
+
+/* buttons (back / load-more / approve / reject) */
+.btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.btn:hover:not(:disabled) {
+  border-color: var(--muted);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn.approve {
+  color: var(--good);
+  border-color: color-mix(in srgb, var(--good) 40%, var(--line));
+}
+.btn.reject {
+  color: var(--bad);
+  border-color: color-mix(in srgb, var(--bad) 40%, var(--line));
+}
+.rowbtns {
+  display: inline-flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+/* clickable table rows (runs list → detail) */
+.table tr.clickable {
+  cursor: pointer;
+}
+.table tr.clickable:hover td {
+  background: var(--panel-2);
+}
+
+/* sortable table headers */
+.th-sort {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+.th-sort:hover {
+  color: var(--text);
+}
+.warnnum {
+  color: var(--warn);
+}
+
+/* run-detail message timeline */
+.msg {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+}
+.msg-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.msg-body {
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .empty {

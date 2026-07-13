@@ -27,6 +27,20 @@ export function formatPercent(ratio: number): string {
 }
 
 /**
+ * Format a millisecond duration compactly (`820ms`, `3.4s`, `2.1m`, `1.3h`). `null`/`undefined`/
+ * non-finite → `—` (used for still-running runs and tools that never recorded a latency).
+ */
+export function formatDuration(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined || !Number.isFinite(ms)) return '—';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = seconds / 60;
+  if (minutes < 60) return `${minutes.toFixed(1)}m`;
+  return `${(minutes / 60).toFixed(1)}h`;
+}
+
+/**
  * Shorten a raw model id for display. Bedrock inference-profile ARNs
  * (`arn:aws:bedrock:…:inference-profile/<region>.<provider>.<model>`) overflow cards, so we keep the
  * distinguishing `<model>` and drop the ARN prefix plus the region/provider qualifiers. Non-ARN ids
