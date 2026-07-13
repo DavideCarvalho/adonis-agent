@@ -5,6 +5,7 @@ import {
   publishAgentRunFinished,
   publishAgentRunStarted,
   publishAgentToolCall,
+  publishAgentToolRetry,
 } from './diagnostics.js';
 import type { AgentStore } from './spi/agent-store.js';
 import type { ModelProvider } from './spi/model-provider.js';
@@ -19,6 +20,7 @@ import type { RolesPolicy } from './spi/roles-policy.js';
 import type { SinkWriter } from './spi/token-stream-sink.js';
 import type { AiToolCtx } from './spi/tool.js';
 import type { ToolRegistry } from './tool-registry.js';
+import { type ToolTransientRetrySetting, invokeWithTransientRetry } from './tool-retry.js';
 import type {
   AgentRunInput,
   Decision,
@@ -66,6 +68,16 @@ export interface AgentLoopDeps {
   retriever?: Retriever;
   /** How many passages inject-mode retrieval requests. Undefined → 5. */
   retrievalTopK?: number;
+  /**
+   * Retries a tool's own invocation, in place, when it throws a classified-transient error (a DB
+   * deadlock, a lock-wait timeout, a serialization failure — see {@link isTransientToolError}) —
+   * never a new durable step/checkpoint, just repeated attempts inside the same `tool:<call.id>` step
+   * body (so a durable replay reuses the memoized successful result and side effects run once).
+   * Default ON (`{ attempts: 2, backoffMs: 150 }` with the default classifier) when undefined; set
+   * `{ classify }` to widen/narrow which errors count as transient, or `false` to disable entirely. A
+   * tool's other (non-transient) failures are unaffected — they remain a one-shot business outcome.
+   */
+  toolTransientRetry?: ToolTransientRetrySetting;
 }
 
 /** Renders retrieved passages as a numbered, citable context block appended to the system prompt. */
@@ -108,6 +120,12 @@ export interface AgentLoopHooks {
    * cached results (stable ids, no double-write, no re-streaming).
    */
   step<T>(name: string, fn: () => Promise<T>): Promise<T>;
+  /**
+   * Recognizes the runner's control-flow signals (durable suspend / continue-as-new) so the tool
+   * transient-retry loop never mistakes one for a retryable tool error. Provided only by the durable
+   * runner; the inline runner has no such notion and leaves it unset.
+   */
+  isControlFlowError?(error: unknown): boolean;
 }
 
 export class QuotaExceededError extends Error {
@@ -434,8 +452,30 @@ export async function runAgentLoop(
       }
 
       try {
+        // The retry loop runs INSIDE the `tool:<call.id>` step so it stays replay-safe: a durable
+        // step memoizes only its successful result, so on replay the whole step returns cached and
+        // the retries never re-run (side effects happen exactly once). A classified-transient error
+        // (DB deadlock / lock-wait timeout / serialization failure) is retried in place; any other
+        // failure surfaces immediately as before. `false` disables retry entirely.
         const output = await hooks.step(`tool:${call.id}`, () =>
-          deps.registry.invoke(call.name, call.input, ctx, deps.rolesPolicy),
+          invokeWithTransientRetry(
+            () => deps.registry.invoke(call.name, call.input, ctx, deps.rolesPolicy),
+            deps.toolTransientRetry ?? {},
+            {
+              ...(hooks.isControlFlowError !== undefined
+                ? { isControlFlowError: hooks.isControlFlowError }
+                : {}),
+              onRetry: (attempt, retryError) => {
+                publishAgentToolRetry({
+                  runId: hooks.runId,
+                  toolName: call.name,
+                  toolCallId: call.id,
+                  attempt,
+                  message: retryError instanceof Error ? retryError.message : String(retryError),
+                });
+              },
+            },
+          ),
         );
         await hooks.step(`persist:toolexec:${call.id}`, () =>
           deps.store.updateToolCall({

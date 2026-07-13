@@ -6,6 +6,7 @@ import type { Retriever } from './spi/retriever.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { TokenStreamSink } from './spi/token-stream-sink.js';
 import type { ToolRegistry } from './tool-registry.js';
+import type { ToolTransientRetrySetting } from './tool-retry.js';
 import type { Persona, PromptBuilder } from './types.js';
 
 /** Everything `runAgentLoop` needs, minus the per-run `day` the runner stamps. */
@@ -30,6 +31,12 @@ export interface AgentDeps {
   retriever?: Retriever;
   /** How many passages inject-mode retrieval requests. Undefined → 5. */
   retrievalTopK?: number;
+  /**
+   * In-place transient-retry policy for a tool's own invocation (DB deadlock / lock-wait timeout /
+   * serialization failure). Undefined → the loop's default (`{ attempts: 2, backoffMs: 150 }`);
+   * `false` disables it.
+   */
+  toolTransientRetry?: ToolTransientRetrySetting;
 }
 
 /** The UTC calendar day (`YYYY-MM-DD`) a run is accounted against — deterministic for quota/day. */

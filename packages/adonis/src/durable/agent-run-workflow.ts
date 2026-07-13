@@ -89,6 +89,9 @@ export class AgentRunWorkflow {
       awaitApproval: (call) => ctx.waitForSignal<Decision>(`tool:${ctx.runId}:${call.id}`),
       // Every side effect + control-flow read is a durable local step (memoized on replay).
       step: (name, fn) => ctx.localStep(name, fn),
+      // Lets the tool transient-retry loop tell a real suspend/continue-as-new apart from a
+      // retryable tool error, so a control-flow signal is never swallowed by a retry.
+      isControlFlowError: isControlFlowSignal,
       // Delegation: a fresh transient subthread (checkpointed so its id is replay-stable), then a
       // tracked child run that streams into this run's own top-level sink.
       runAgent: async (agentName, task) => {

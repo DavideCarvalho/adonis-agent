@@ -31,6 +31,17 @@ export {
   type AgentLoopDeps,
   type AgentLoopHooks,
 } from './agent-loop.js';
+export {
+  invokeWithTransientRetry,
+  isTransientToolError,
+  DEFAULT_TOOL_TRANSIENT_RETRY_ATTEMPTS,
+  DEFAULT_TOOL_TRANSIENT_RETRY_BACKOFF_MS,
+} from './tool-retry.js';
+export type {
+  ToolTransientRetryOptions,
+  ToolTransientRetrySetting,
+  InvokeWithTransientRetryOptions,
+} from './tool-retry.js';
 export * from './diagnostics.js';
 
 // ── Wave 2: Adonis integration shell ─────────────────────────────────────────

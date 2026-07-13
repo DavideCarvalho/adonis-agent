@@ -136,6 +136,9 @@ export default class AgentProvider {
       ...(pricingStore !== undefined ? { pricingStore } : {}),
       ...(retriever !== undefined ? { retriever } : {}),
       ...(config.retrievalTopK !== undefined ? { retrievalTopK: config.retrievalTopK } : {}),
+      ...(config.toolTransientRetry !== undefined
+        ? { toolTransientRetry: config.toolTransientRetry }
+        : {}),
     });
     // `durable: true` runs each turn as a replay-safe `@adonis-agora/durable` workflow; it degrades
     // gracefully to the in-process runner when the durable peer isn't installed/configured.

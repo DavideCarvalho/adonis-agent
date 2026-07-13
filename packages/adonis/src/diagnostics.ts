@@ -53,6 +53,19 @@ export interface AgentRetrieved {
   queryLength: number;
   count: number;
 }
+/**
+ * A transient-classified tool error being retried in place (no new checkpoint) — see
+ * `invokeWithTransientRetry`. Emitted once per retry (not for the final, non-retried outcome).
+ */
+export interface AgentToolRetry {
+  runId: string;
+  toolName: string;
+  toolCallId: string;
+  /** 1-based ordinal of the attempt that just failed and is about to be retried. */
+  attempt: number;
+  /** The failed attempt's error message. */
+  message: string;
+}
 
 /** Maps each event name to its payload type, so {@link publishAgent} is checked at the call site. */
 export interface AgentDiagnosticPayloads {
@@ -63,6 +76,7 @@ export interface AgentDiagnosticPayloads {
   'run.finished': AgentRunFinished;
   delegated: AgentDelegated;
   retrieved: AgentRetrieved;
+  'tool.retry': AgentToolRetry;
 }
 
 export type AgentDiagnosticEvent = keyof AgentDiagnosticPayloads;
@@ -105,4 +119,7 @@ export function publishAgentDelegated(payload: AgentDelegated): void {
 }
 export function publishAgentRetrieved(payload: AgentRetrieved): void {
   publishAgent('retrieved', payload);
+}
+export function publishAgentToolRetry(payload: AgentToolRetry): void {
+  publishAgent('tool.retry', payload);
 }

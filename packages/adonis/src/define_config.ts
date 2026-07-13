@@ -26,6 +26,7 @@ import type {
   StoreContext,
   StoreFactory,
 } from './stores/factory.js';
+import type { ToolTransientRetrySetting } from './tool-retry.js';
 import type { AgentDefinition } from './types.js';
 
 /** A lazy factory thunk, so the peer (`ai`/a provider SDK) is imported only when the config loads. */
@@ -131,6 +132,15 @@ export interface AgentConfig {
   tools?: BrandedFunctionalTool[];
   /** Cap on model↔tool iterations per turn. Default 8. */
   maxSteps?: number;
+  /**
+   * Retries a tool's own invocation, in place, when it throws a classified-transient error (a DB
+   * deadlock, a lock-wait timeout, a serialization failure) — a bounded retry inside the tool's
+   * durable step, so a replay reuses the memoized result and side effects run once. Default ON
+   * (`{ attempts: 2, backoffMs: 150 }` with the default classifier); pass `{ classify }` to
+   * widen/narrow which errors count as transient, or `false` to disable. Non-transient failures are
+   * never retried — they stay a one-shot business outcome.
+   */
+  toolTransientRetry?: ToolTransientRetrySetting;
   /** Emit `agora:agent:*` diagnostics events when `@adonis-agora/diagnostics` is installed. Default true. */
   emitDiagnostics?: boolean;
 }
