@@ -1,17 +1,28 @@
 import type { BrandedFunctionalTool } from './ai-tool-ref.js';
 import type { ActorResolver } from './spi/actor-resolver.js';
 import type { AttachmentStagingStore } from './spi/attachment-staging.js';
+import type { AgentGovernanceQueries } from './spi/governance-queries.js';
 import type { ModelProvider } from './spi/model-provider.js';
 import type { AgentPricingStore } from './spi/pricing-store.js';
 import type { QuotaStore } from './spi/quota-store.js';
 import type { Retriever } from './spi/retriever.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { TokenStreamSink } from './spi/token-stream-sink.js';
-import { attachmentStores, pricingStores, quotas, retrievers, stores } from './stores/factory.js';
+import {
+  attachmentStores,
+  governanceQueries,
+  pricingStores,
+  quotas,
+  retrievers,
+  stores,
+} from './stores/factory.js';
 import type {
   AttachmentStagingContext,
   AttachmentStagingFactory,
   EmbeddingFactory,
+  GovernanceQueriesContext,
+  GovernanceQueriesFactory,
+  LucidGovernanceConfig,
   LucidPricingConfig,
   LucidStoreConfig,
   MemoryRetrieverConfig,
@@ -77,6 +88,14 @@ export interface AgentConfig {
    * `pricingStores.lucid()` for the SQL-backed table or `pricingStores.memory()` for tests.
    */
   pricingStore?: AgentPricingStore | PricingFactory;
+  /**
+   * The governance read-model the optional `/agent/governance/*` read routes serve from — per-model /
+   * per-actor cost & usage rollups, the daily usage trend, and recent tool-call / thread activity over
+   * the persisted agent tables. Pass an {@link AgentGovernanceQueries} instance, or a lazy
+   * `governanceQueries.lucid()` factory (which prices its rollups against the configured `pricingStore`).
+   * Omit → the governance routes are not mounted. Read-only; safe to leave off.
+   */
+  governanceQueries?: AgentGovernanceQueries | GovernanceQueriesFactory;
   /**
    * Enables always-on ("inject") RAG: before each turn the loop retrieves passages for the user message
    * and folds them into the system prompt (replay-safe under durable). Pass a {@link Retriever} directly
@@ -150,7 +169,7 @@ export function defineConfig(config: AgentConfig): AgentConfig {
   return config;
 }
 
-export { stores, quotas, pricingStores, retrievers, attachmentStores };
+export { stores, quotas, pricingStores, governanceQueries, retrievers, attachmentStores };
 export type {
   StoreContext,
   StoreFactory,
@@ -162,6 +181,9 @@ export type {
   PricingContext,
   PricingFactory,
   LucidPricingConfig,
+  GovernanceQueriesContext,
+  GovernanceQueriesFactory,
+  LucidGovernanceConfig,
   RetrieverContext,
   RetrieverFactory,
   MemoryRetrieverConfig,

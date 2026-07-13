@@ -5,6 +5,7 @@ import {
   type ActorResolver,
   type AgentConfig,
   AgentDepsFactory,
+  type AgentGovernanceQueries,
   type AgentPricingStore,
   AgentRegistry,
   type AgentRunner,
@@ -117,6 +118,9 @@ export default class AgentProvider {
     // Quota is resolved after the store so a ledger-backed quota can read the store's usage ledger.
     const quota = await this.#resolveQuota(config, store);
     const pricingStore = await this.#resolvePricing(config);
+    // Governance read-model is resolved after pricing so the Lucid read-model prices its rollups
+    // against the same live prices the loop's cost fold uses.
+    const governance = await this.#resolveGovernance(config, pricingStore);
     const retriever = await this.#resolveRetriever(config);
     const attachmentStaging = await this.#resolveAttachmentStaging(config);
     const authorizer = this.#resolveAuthorizer(config, defaultRoles);
@@ -149,7 +153,7 @@ export default class AgentProvider {
     const service = new AgentService(runner, store, factory);
     this.app.container.bindValue(AgentService, service);
 
-    await this.#registerRoutes(config, service, actorResolver, attachmentStaging);
+    await this.#registerRoutes(config, service, actorResolver, attachmentStaging, governance);
   }
 
   async shutdown() {
@@ -194,6 +198,23 @@ export default class AgentProvider {
     const pricingStore = config.pricingStore;
     if (pricingStore === undefined) return undefined;
     return typeof pricingStore === 'function' ? pricingStore({ app: this.app }) : pricingStore;
+  }
+
+  /**
+   * Build the governance read-model from config (a `GovernanceQueriesFactory` thunk or a ready
+   * instance). The factory receives the already-resolved `pricingStore` so the Lucid read-model prices
+   * its rollups against the loop's live prices. `undefined` → the `/agent/governance/*` routes aren't
+   * mounted.
+   */
+  async #resolveGovernance(
+    config: AgentConfig,
+    pricingStore: AgentPricingStore | undefined,
+  ): Promise<AgentGovernanceQueries | undefined> {
+    const governance = config.governanceQueries;
+    if (governance === undefined) return undefined;
+    return typeof governance === 'function'
+      ? governance({ app: this.app, ...(pricingStore !== undefined ? { pricingStore } : {}) })
+      : governance;
   }
 
   /** Build the inject-mode retriever from config (a `RetrieverFactory` thunk or a ready instance). */
@@ -271,6 +292,7 @@ export default class AgentProvider {
     service: AgentService,
     actorResolver: ActorResolver,
     attachmentStaging: AttachmentStagingStore | undefined,
+    governance: AgentGovernanceQueries | undefined,
   ): Promise<void> {
     const router = await this.app.container.make('router');
     const path = (config.path ?? 'agent').replace(/^\/+|\/+$/g, '');
@@ -399,6 +421,62 @@ export default class AgentProvider {
           actor,
         });
         return ctx.response.json(attachment);
+      });
+    }
+
+    // ── OPTIONAL governance read routes. Mounted only when `governanceQueries` is configured, so an
+    // app without it never exposes the cost/usage read-model. All read-only (GET) and authenticated
+    // (actor resolved via the shared resolver — governance is cross-actor data). `from`/`to` are
+    // inclusive UTC days (`YYYY-MM-DD`), defaulting to today; `limit` defaults to 50, clamped to 200
+    // (mirroring the dashboard's own clamp).
+    if (governance !== undefined) {
+      const gov = governance;
+      const g = (suffix: string) => p(`governance/${suffix}`);
+      const range = (ctx: HttpContext) => {
+        const today = new Date().toISOString().slice(0, 10);
+        const from = ctx.request.input('from', today);
+        const to = ctx.request.input('to', today);
+        return { fromDay: String(from), toDay: String(to) };
+      };
+      const limitOf = (ctx: HttpContext) => {
+        const raw = Number.parseInt(String(ctx.request.input('limit', '50')), 10);
+        const value = Number.isFinite(raw) && raw > 0 ? raw : 50;
+        return Math.min(value, 200);
+      };
+
+      // GET /agent/governance/spend/model — per-model token + cost rollup over the range.
+      router.get(g('spend/model'), async (ctx: HttpContext) => {
+        const actor = await this.#resolveActor(ctx, actorResolver);
+        if (actor === null) return;
+        return ctx.response.json(await gov.spendByModel(range(ctx)));
+      });
+
+      // GET /agent/governance/spend/actor — per-actor token + cost rollup over the range.
+      router.get(g('spend/actor'), async (ctx: HttpContext) => {
+        const actor = await this.#resolveActor(ctx, actorResolver);
+        if (actor === null) return;
+        return ctx.response.json(await gov.spendByActor(range(ctx)));
+      });
+
+      // GET /agent/governance/usage/trend — the daily token + cost trend over the range.
+      router.get(g('usage/trend'), async (ctx: HttpContext) => {
+        const actor = await this.#resolveActor(ctx, actorResolver);
+        if (actor === null) return;
+        return ctx.response.json(await gov.usageTrend(range(ctx)));
+      });
+
+      // GET /agent/governance/tool-calls/recent — newest-first recent tool-call activity feed.
+      router.get(g('tool-calls/recent'), async (ctx: HttpContext) => {
+        const actor = await this.#resolveActor(ctx, actorResolver);
+        if (actor === null) return;
+        return ctx.response.json(await gov.recentToolCalls(limitOf(ctx)));
+      });
+
+      // GET /agent/governance/threads/recent — newest-first recent thread activity feed.
+      router.get(g('threads/recent'), async (ctx: HttpContext) => {
+        const actor = await this.#resolveActor(ctx, actorResolver);
+        if (actor === null) return;
+        return ctx.response.json(await gov.recentThreads(limitOf(ctx)));
       });
     }
   }

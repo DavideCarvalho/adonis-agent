@@ -50,6 +50,7 @@ export {
   stores,
   quotas,
   pricingStores,
+  governanceQueries,
   retrievers,
   attachmentStores,
 } from './define_config.js';
@@ -64,6 +65,9 @@ export type {
   PricingFactory,
   PricingContext,
   LucidPricingConfig,
+  GovernanceQueriesContext,
+  GovernanceQueriesFactory,
+  LucidGovernanceConfig,
   RetrieverContext,
   RetrieverFactory,
   MemoryRetrieverConfig,
@@ -124,3 +128,4 @@ export type {
 export { createTableStatements, createAgentTables, AGENT_TABLES } from './stores/lucid-schema.js';
 export { LedgerQuotaStore } from './stores/ledger-quota.js';
 export { LucidPricingStore } from './stores/lucid-pricing.js';
+export { LucidGovernanceQueries } from './stores/lucid-governance-queries.js';

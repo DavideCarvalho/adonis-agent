@@ -3,6 +3,7 @@ import type { IngestDocument } from '../rag/ingest.js';
 import type { AgentStore } from '../spi/agent-store.js';
 import type { AttachmentStagingStore } from '../spi/attachment-staging.js';
 import type { EmbeddingProvider } from '../spi/embedding-provider.js';
+import type { AgentGovernanceQueries } from '../spi/governance-queries.js';
 import type { AgentPricingStore } from '../spi/pricing-store.js';
 import type { QuotaStore } from '../spi/quota-store.js';
 import type { Retriever } from '../spi/retriever.js';
@@ -180,6 +181,62 @@ export const pricingStores = {
         ? db.connection(config.connection)
         : db) as unknown as LucidDatabaseLike;
       return new LucidPricingStore(client);
+    };
+  },
+};
+
+// ── Governance-queries factories ─────────────────────────────────────────────
+
+/**
+ * Runtime context a {@link GovernanceQueriesFactory} thunk receives — the {@link StoreContext} plus the
+ * already-resolved {@link AgentPricingStore} (when the app configured one), so the read-model prices its
+ * cost rollups against the SAME live prices the loop's cost fold uses. The provider resolves pricing
+ * first, then the governance queries, then passes it here (mirroring how {@link QuotaContext} carries the
+ * built store). `pricingStore` is absent when the app configured none → the read-model reports 0 cost.
+ */
+export interface GovernanceQueriesContext extends StoreContext {
+  pricingStore?: AgentPricingStore;
+}
+
+/**
+ * A configured governance read-model: a lazy thunk the agent provider calls at boot to build the
+ * {@link AgentGovernanceQueries} the optional `/agent/governance/*` read routes serve from. Each factory
+ * lazily imports its peer inside the thunk (like {@link stores}), so nothing loads until governance is
+ * actually selected.
+ */
+export type GovernanceQueriesFactory = (
+  ctx: GovernanceQueriesContext,
+) => AgentGovernanceQueries | Promise<AgentGovernanceQueries>;
+
+/** Options for the Lucid-backed governance read-model. */
+export interface LucidGovernanceConfig {
+  /** Lucid connection name to use. Defaults to the `Database` default connection. */
+  connection?: string;
+}
+
+/**
+ * The governance-queries factory namespace used in `config/agent.ts`, mirroring {@link pricingStores}:
+ *
+ * ```ts
+ * export default defineConfig({
+ *   pricingStore: pricingStores.lucid(),
+ *   governanceQueries: governanceQueries.lucid(),
+ * })
+ * ```
+ *
+ * The Lucid read-model aggregates the same five agent tables the store writes and prices cost against
+ * the configured `pricingStore`; wiring it mounts the `/agent/governance/*` read routes.
+ */
+export const governanceQueries = {
+  /** Aggregate the five agent tables in SQL via `@adonisjs/lucid`, priced against the pricing store. */
+  lucid(config: LucidGovernanceConfig = {}): GovernanceQueriesFactory {
+    return async ({ pricingStore }) => {
+      const db = (await import('@adonisjs/lucid/services/db')).default;
+      const { LucidGovernanceQueries } = await import('./lucid-governance-queries.js');
+      const client = (config.connection !== undefined
+        ? db.connection(config.connection)
+        : db) as unknown as LucidDatabaseLike;
+      return new LucidGovernanceQueries(client, pricingStore);
     };
   },
 };
