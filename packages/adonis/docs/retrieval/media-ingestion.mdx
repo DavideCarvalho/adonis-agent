@@ -1,0 +1,59 @@
+---
+title: RAG media ingestion
+description: Auto-index uploaded files into the agent's RAG store — mediaRagIngestion bridges an @adonis-agora/media upload.complete event through text extraction, chunking, and embedding, tagged per tenant/owner.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+`mediaRagIngestion` bridges a media library into the RAG stack: when a file lands, it fetches the bytes, extracts text by content type, chunks and embeds it, and upserts the chunks into the same [vector store](/docs/agent/retrieval/rag) your retriever searches — tagging every chunk with `{ mediaId, ownerType, ownerId, collection, tenantRef }` so retrieval can be scoped per tenant/owner/collection. It lives on the `@adonis-agora/agent/rag-media` subpath.
+
+<Callout type="info" title="Nothing is imported until you wire it">
+The bridge is fully structural — it never imports `@adonis-agora/media` or a PDF library. You pass a live `MediaManager` handle (anything with `disk(name).getBytes(key)`) and, for binary formats, register your own extractor. It's opt-in and no-op until called.
+</Callout>
+
+## Wire it
+
+```ts title="providers/app_provider.ts"
+import { mediaRagIngestion, defaultTextExtractor } from '@adonis-agora/agent/rag-media'
+
+const ingestion = mediaRagIngestion({
+  media: await app.container.make('media.manager'), // structural MediaManager handle
+  embedder: myEmbedder, // the same EmbeddingProvider your retriever uses
+  store: myVectorStore, // the same VectorStore the retriever searches
+  contentTypes: ['text/plain', 'text/markdown', 'application/pdf'],
+  extractor: defaultTextExtractor().register('application/pdf', myPdfExtractor),
+  resolve: async ({ id, disk, key }) => lookupMediaRecord(id), // upload.complete payload → MediaRef
+})
+
+const off = ingestion.subscribe() // auto-ingest on every upload.complete
+```
+
+## Two triggers
+
+- **Explicit** — `await ingestion.ingestMedia(ref)` with a `MediaRef` (`{ id, disk, key, contentType, ownerType?, ownerId?, collection?, tenantRef?, size? }`), e.g. from your own upload flow.
+- **Subscribe** — `ingestion.subscribe()` listens on the media library's `agora:media:upload.complete` diagnostics channel and auto-ingests each finished upload. It needs a `resolve` seam to turn the event payload (`{ id, disk, key }`) into a full `MediaRef` (the event carries no content-type or owner metadata); without one it throws `MediaRagResolveRequiredError`.
+
+`subscribe()` is idempotent, returns an unsubscribe function, and catches ingestion errors (publishing them on `agora:rag:media.failed`) so a bad file never breaks the channel. `unsubscribe()` and `settle()` await in-flight work for a graceful shutdown.
+
+## The pipeline
+
+Per file: content-type filter → size gate (`maxBytes`) → read bytes → extract text → **remove-then**-chunk (so a re-upload that shrinks doesn't leave a stale tail) → embed → upsert. Unsupported, oversized, or empty-text files are **skipped, not errored** — `MediaIngestResult` is `{ status: 'ingested', chunks }` or `{ status: 'skipped', reason }` where `reason` is `unsupported-type` / `too-large` / `empty-text`.
+
+<Callout type="info" title="Text extraction is pluggable">
+`defaultTextExtractor()` handles `text/*`, JSON, and HTML — binary formats are skipped rather than indexed as garbage. Register a parser to widen it (`defaultTextExtractor().register('application/pdf', fn)`); the PDF/DOCX library stays entirely on the host side, never a dependency here.
+</Callout>
+
+## Config reference
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `media` | — | The `MediaManager` handle (structural) bytes are read through. Required. |
+| `embedder` | — | Embeds each chunk. Use the same `EmbeddingProvider` as the retriever. Required. |
+| `store` | — | The `VectorStore` chunks are upserted into. Required. |
+| `extractor` | `defaultTextExtractor()` | Bytes → text. Register hooks to widen it. |
+| `contentTypes` | all supported | Allow-list checked before the extractor. |
+| `chunk` | — | Chunking options forwarded to `chunkDocuments`. |
+| `maxBytes` | — | Skip files larger than this (checked against `ref.size`). |
+| `resolve` | — | `upload.complete` payload → `MediaRef`. Required for `subscribe()`. |
+
+`removeMedia(mediaId)` drops a document's chunks — the delete half of keeping RAG in sync. Deterministic in-memory doubles (`FakeMediaManager`, `fakePdfExtractor`, `inMemoryMediaRagIngestion`) ship in the [testing kit](/docs/agent/testing).

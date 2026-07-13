@@ -1,0 +1,52 @@
+---
+title: Transient tool retries
+description: Retry a tool's own invocation in place when it hits a classified-transient DB error (deadlock, lock-wait timeout, serialization failure) — bounded, replay-safe, and on by default, while business failures stay one-shot.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+A DB deadlock, a lock-wait timeout, a serialization failure — these mean the server rolled the tool's work back, so retrying is safe. A tool's *business* failure ("order not found") is a real outcome and must not be retried. `@adonis-agora/agent` draws exactly that line: it retries a **classified-transient** error in place, and only that.
+
+## On by default
+
+Transient retry is enabled out of the box — `{ attempts: 2, backoffMs: 150 }` with the default classifier. Tune or disable it with `toolTransientRetry`:
+
+```ts title="config/agent.ts"
+export default defineConfig({
+  model: () => aiSdkModel(openai('gpt-4o-mini')),
+
+  // the default — shown for illustration
+  toolTransientRetry: { attempts: 2, backoffMs: 150 },
+
+  // ...or widen/narrow which errors count as transient
+  // toolTransientRetry: { attempts: 3, classify: (e) => isMyTransient(e) },
+
+  // ...or turn it off entirely
+  // toolTransientRetry: false,
+})
+```
+
+The wait between attempt _N_ and _N+1_ is `backoffMs * N`. `false` runs the tool once, unwrapped.
+
+## What counts as transient
+
+The default classifier recognizes lock-contention shapes across MySQL, Postgres, and SQLite — by driver `code` / `errno` / `sqlState` or a matching message — and checks one level of `cause` (drivers commonly wrap the original error):
+
+- **MySQL** — `1213` / `1205` (`ER_LOCK_DEADLOCK` / `ER_LOCK_WAIT_TIMEOUT`).
+- **Postgres** — `40001` / `40P01` (serialization failure / deadlock detected).
+- **SQLite** — `SQLITE_BUSY`.
+- A message matching `deadlock` / `lock wait timeout` / `serialization failure`.
+
+Any other `Error` is **not** transient — it surfaces immediately as a one-shot business outcome. Pass a custom `classify` to change the rule.
+
+<Callout type="info" title="Replay-safe: one step, side effects once">
+The loop wraps `registry.invoke(...)` with the retry loop *inside* the `tool:<callId>` durable step body. So under [durable](/docs/agent/durability/durable-runner) replay the whole step is memoized on its successful result — a retry never becomes a new checkpoint, history still shows exactly one step per tool call, and a tool's side effects run once. Each wait-and-retry emits a `tool.retry` diagnostics event.
+</Callout>
+
+## Tool filters — the offered list
+
+Retry decides what happens *when* a tool runs; **filtering** decides *which* tools the model is offered in the first place. Before each turn the loop assembles the tool list as an intersection of three allow-lists:
+
+> registered tools ∩ the actor's **role** ∩ the **persona**'s `allowedTools` ∩ the **agent**'s `tools`
+
+A tool that any layer excludes is never even described to the model — the same fail-closed filter that then re-checks at invoke time. See [Authorization](/docs/agent/governance/authorization#the-double-check) and [Personas & agents](/docs/agent/authoring/personas-and-agents) for each layer.

@@ -1,52 +1,68 @@
 ---
 title: Roadmap
-description: What @adonis-agora/agent intentionally defers in 0.1.0 — the durable runner, the governance read-model and dashboard, a Telescope tab, the authz adapter, the data satellite, and an Agora-scoped React package. The seams exist; the features are not built yet.
+description: What @adonis-agora/agent has shipped since the initial 0.1.0 core — the durable runner, RAG, the governance read-model, dashboard and Telescope tab, the authz adapter, the data satellite, multimodal attachments, and Redis streaming — and the few things still deferred.
 icon: Map
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
-`@adonis-agora/agent` 0.1.0 ships a focused, governed core: a streaming agent loop, tool-calling with HITL, fail-closed authorization, quota and cost accounting, Lucid persistence, multi-agent delegation, and a testing kit — all on the **inline runner**. Several adjacent capabilities are intentionally **left out** of this release. The SPIs were designed with them in mind (the seams exist), but the features themselves are not built yet.
+`@adonis-agora/agent` shipped a focused, governed core first: a streaming agent loop, tool-calling with HITL, fail-closed authorization, quota and cost accounting, Lucid persistence, multi-agent delegation, and a testing kit. Several adjacent capabilities were designed for from day one (the SPIs left the seams) but built afterward. The **parity-sync** release closes most of those gaps.
 
-<Callout type="info" title="Why call it out">
-  The point of this page is honesty about scope. If you're evaluating the library for one of the use cases below, you'll know it isn't in 0.1.0 — and roughly where it slots in when it lands.
+<Callout type="info" title="What this page tracks">
+  Honesty about scope: what's real now (with links), and what's still intentionally out. If a capability moved from "deferred" to "shipped", it's because the code and tests landed — not a wishlist.
 </Callout>
 
 ---
 
-## Deferred for 0.1.0
+## Shipped since the initial core
 
 ### The durable runner
 
-The headline deferral. The [agent loop](/docs/agent/concepts/agent-loop) was written against a hooks seam precisely so the *same* loop body can run either in-process or as a durable workflow — but only the inline runner ships today. Setting `durable: true` logs a warning and falls back to inline.
+The headline. The [agent loop](/docs/agent/concepts/agent-loop) was written against a hooks seam precisely so the *same* body runs in-process or durably — and now `durable: true` runs each turn as a replay-safe [`@adonis-agora/durable`](/docs/durable) workflow: memoized `localStep` checkpoints, HITL approval as a `waitForSignal` suspend that survives restarts, and delegation as a `ctx.child` run. It degrades gracefully to inline when the peer isn't wired. See [The durable runner](/docs/agent/durability/durable-runner).
 
-The durable runner maps the loop's hooks onto [`@adonis-agora/durable`](/docs/durable) 0.7.0 primitives:
+### RAG & retrieval
 
-- `step(name, fn)` → `ctx.localStep(name, fn)` — every side-effect becomes a replay-safe checkpoint.
-- `awaitApproval(call)` → `ctx.waitForSignal(token)` — a HITL approval that survives crashes, deploys, and month-long waits.
-- `runAgent(name, task)` → `ctx.child(...)` — delegation as a durable child workflow.
+A full retrieval stack: the `Retriever` / `EmbeddingProvider` / `Reranker` SPIs, an in-memory cosine retriever and a production [pgvector store](/docs/agent/retrieval/pgvector), always-on "inject" retrieval that folds cited passages into the system prompt, and [media auto-ingestion](/docs/agent/retrieval/media-ingestion) that indexes uploads off an `agora:media:upload.complete` event. See [RAG & retrieval](/docs/agent/retrieval/rag).
 
-That's what turns single-replica, in-memory streaming and approvals into crash-proof, horizontally-scaled runs.
+### The governance read-model, dashboard & Telescope tab
 
-### The governance read-model + dashboard SPA
+`governanceQueries.lucid()` is a Lucid read-model over the persisted tables — spend, usage trend, run lifecycle, per-tool stats, reliability, and a cross-thread approvals inbox — exposed as `/agent/governance/*` routes. The standalone [`@adonis-agora/agent-dashboard`](/docs/agent/governance/dashboard) SPA and the [Telescope "Agent" tab](/docs/agent/governance/telescope) both consume it. See [Governance read-model](/docs/agent/governance/read-model).
 
-`AgentGovernanceQueries` (spend by model/actor, usage trend, recent tool calls/threads) has an in-memory implementation in the [testing kit](/docs/agent/testing), but a **Lucid read-model** over the persisted tables — and the standalone governance **dashboard SPA** that consumes it — are not built yet. The cost/usage ledger they read from is already being written on every turn.
+### `agent_run` lifecycle tracking
 
-### A Telescope "Agent" tab
+Both runners record each run to an `agent_run` table (`running → completed | failed | cancelled`, with step/token counts and a `durable` flag), back-referenced by messages, tool calls, and usage — the spine of the run-lifecycle governance surfaces. See [Governance read-model](/docs/agent/governance/read-model#run-lifecycle-tracking).
 
-A first-party [Telescope](/docs/telescope) tab for live agent activity — in-flight runs, streaming tool calls, delegations, forbidden attempts — off the `agora:agent:*` diagnostics channel. The events are already published; the tab that visualizes them is future work.
+### The authz (Bouncer) adapter
 
-### The `@adonis-agora/authz` adapter
-
-Tools can declare an `ability`, and the `RolesPolicy` seam accepts an async `can(...)`, so an ability-aware gate drops straight in. A first-party [`@adonis-agora/authz`](/docs/authz) Bouncer adapter — resolving `bouncer.forUser(actor).allows(ability)` — is planned. Until then, the default role-based policy governs tools by `roles`. See [Authorization](/docs/agent/governance/authorization).
+`authzToolAuthorizer` swaps the ADMIN-only role gate for ability-based authorization through [`@adonis-agora/authz`](/docs/authz) — checking each tool's declared `ability`, tenant-scoped and fail-closed (no ADMIN fallback). See [Authz (Bouncer) adapter](/docs/agent/governance/authz-bouncer).
 
 ### The `data` governed-SQL satellite
 
-A satellite that would let the agent run **governed SQL** — scoped, read-only, policy-checked queries as a first-class tool surface — is anticipated but not built.
+`dataTool` gives the agent a single fail-closed read-only SQL tool: one validated `SELECT`, a required table allow-list, tenant-scope rewriting, `LIMIT` injection, and result truncation. See [Governed SQL](/docs/agent/authoring/data-satellite).
+
+### Multimodal attachments
+
+Images and PDFs attach to a message and reach a vision-capable model as native parts, behind an attachment-staging seam and an optional `POST /agent/attachments` upload route. See [Attachments & multimodal](/docs/agent/authoring/attachments).
+
+### Transient tool retries & tool filters
+
+A tool's own invocation retries in place on a classified-transient DB error (deadlock / lock-wait / serialization), replay-safe and on by default; business failures stay one-shot. See [Transient tool retries](/docs/agent/authoring/transient-retry).
+
+### Redis multi-replica streaming
+
+`tokenSinks.redis(...)` fans a run's tokens across replicas so any pod serves any run's SSE stream, with the envelope byte-identical — plus an actor-directory seam for read-side identity labels. See [Multi-replica streaming](/docs/agent/redis-streaming).
+
+---
+
+## Still deferred
+
+### Embedding & reranker adapters
+
+The `EmbeddingProvider` and `Reranker` SPIs and both bundled retrievers ship, but a first-party `aiSdkEmbedding` adapter (over the AI SDK's `embedMany`) and provider rerankers (Cohere/Voyage) are not built yet — wire your own or use the testing doubles. See [RAG & retrieval](/docs/agent/retrieval/rag).
 
 ### An Agora-scoped React package
 
-The existing framework-agnostic `@dudousxd/nestjs-agent-react` client (`useAgentChat` / `AgentChatTransport`) already works **unchanged** against these routes, because the SSE contract is preserved byte-for-byte — see [Streaming & HTTP](/docs/agent/streaming-and-http#consuming-from-react). An **Agora-scoped republish** (matching branding and imports) is on the list, but it's ergonomics, not a capability gap.
+The framework-agnostic `@dudousxd/nestjs-agent-react` client (`useAgentChat` / `AgentChatTransport`) already works **unchanged** against these routes, because the SSE contract is preserved byte-for-byte — see [Streaming & HTTP](/docs/agent/streaming-and-http#consuming-from-react). An **Agora-scoped republish** (matching branding and imports) is still on the list, but it's ergonomics, not a capability gap.
 
 ---
 
@@ -58,24 +74,8 @@ The reference NestJS implementation used a codegen step. On AdonisJS that's unne
 
 ---
 
-## What is in 0.1.0
-
-For contrast, the current release does ship:
-
-- **A governed agent loop** — model → tools → approval → model, capped by `maxSteps`, provider-agnostic. See [The agent loop](/docs/agent/concepts/agent-loop).
-- **Tool-calling** — `@AiTool` classes and `defineTool` functions, discovered from `app/agent_tools`, with `read` / `action` kinds and Standard Schema inputs. See [Tools](/docs/agent/authoring/tools).
-- **Fail-closed governance** — an ADMIN-only-by-default authorizer with the offered-and-invoke double check, and an actor resolver that never fabricates a caller. See [Authorization](/docs/agent/governance/authorization).
-- **Human-in-the-loop** — `action` tools pause for approve/reject. See [Streaming & HTTP](/docs/agent/streaming-and-http#human-in-the-loop).
-- **Quota & cost accounting** — a pre-model daily quota, a usage ledger, and cost that's real when a gateway reports it, estimated from a pricing table otherwise. See [Quota & cost](/docs/agent/governance/quota-and-cost).
-- **Multi-agent delegation** — named agents and synthesized `ask_<agent>` delegate tools. See [Personas & agents](/docs/agent/authoring/personas-and-agents).
-- **Streaming over SSE** — eleven `/agent` routes and a re-attachable token stream. See [Streaming & HTTP](/docs/agent/streaming-and-http).
-- **Lucid persistence** — five tables on Postgres / MySQL / SQLite, plus an in-memory twin. See [State stores](/docs/agent/stores/lucid).
-- **A testing kit** — a deterministic fake model and in-memory doubles for every seam. See [Testing](/docs/agent/testing).
-- **Structural diagnostics** — `agora:agent:*` events, captured by [Telescope](/docs/telescope) when present.
-
----
-
 ## Next steps
 
 - [Getting Started](/docs/agent/getting-started) — what you can build today.
-- [The agent loop](/docs/agent/concepts/agent-loop) — the seam the durable runner will plug into.
+- [The agent loop](/docs/agent/concepts/agent-loop) — the seam the durable runner plugs into.
+- [The durable runner](/docs/agent/durability/durable-runner) — crash-proof, horizontally-scaled runs.

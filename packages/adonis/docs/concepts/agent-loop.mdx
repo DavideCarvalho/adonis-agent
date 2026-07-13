@@ -6,7 +6,7 @@ description: The provider-agnostic agent turn — the model→tools→approval�
 import { Callout } from 'fumadocs-ui/components/callout';
 import { Steps, Step } from 'fumadocs-ui/components/steps';
 
-At the center of the library is `runAgentLoop` — one provider-agnostic function that drives a single agent turn. It is the same body whether the turn runs in-process or (in the future) as a durable workflow. Understanding it is the fastest way to understand everything else.
+At the center of the library is `runAgentLoop` — one provider-agnostic function that drives a single agent turn. It is the same body whether the turn runs in-process or as a durable workflow. Understanding it is the fastest way to understand everything else.
 
 ## The turn, step by step
 
@@ -55,12 +55,14 @@ Every tool invocation re-checks the actor's role and re-validates the input agai
 
 `runAgentLoop` takes injected dependencies (`model`, `store`, `registry`, `rolesPolicy`, `quota?`, the resolved `systemPrompt`, and a pre-computed `day`) plus a small `AgentLoopHooks` object. The hooks are the entire difference between running in-process and running durably:
 
-| Hook | Inline runner | Durable runner (deferred) |
+| Hook | Inline runner | Durable runner |
 | --- | --- | --- |
 | `step(name, fn)` | calls `fn()` directly | wraps `fn` in a durable checkpoint (`ctx.localStep`) so replay returns the cached result |
 | `awaitApproval(call, ctx)` | resolves a pending in-memory promise | awaits a durable signal (`ctx.waitForSignal`) that survives restarts |
 | `openSink()` | opens the in-process token sink | opens a shared sink keyed by run id |
 | `runAgent(name, task)` | runs a nested in-process loop | starts a durable child workflow (`ctx.child`) |
+
+Both runners ship — the durable one is opt-in via `durable: true`. See [The durable runner](/docs/agent/durability/durable-runner).
 
 <Callout type="info" title="Why every side-effect goes through step()">
 Persisting a message, calling the model, invoking a tool, bumping the quota — each is wrapped in `hooks.step(name, fn)`. Inline, that wrapper is a no-op passthrough. Under a durable runner, the *same* wrapper makes each side-effect a replay-safe checkpoint: on recovery, completed steps return their saved result instead of running again — no double writes, no re-streaming, stable ids. The loop was written once, for both worlds.
@@ -68,7 +70,7 @@ Persisting a message, calling the model, invoking a tool, bumping the quota — 
 
 ## Determinism & replay-readiness
 
-The loop body is deliberately deterministic so the future durable runner can recover a suspended turn by replaying it. The `day` (`YYYY-MM-DD`) is stamped *once* by the runner and passed in, rather than read inside the loop, so quota-by-day stays stable across a replay. Nothing in the body calls `Date.now()` or `Math.random()` directly on a control path — those live in `step`-wrapped side effects. This is why HITL is modeled as a hook the runner supplies: inline it's a promise, durably it's a signal, and the loop doesn't care which.
+The loop body is deliberately deterministic so the durable runner can recover a suspended turn by replaying it. The `day` (`YYYY-MM-DD`) is stamped *once* by the runner and passed in, rather than read inside the loop, so quota-by-day stays stable across a replay. Nothing in the body calls `Date.now()` or `Math.random()` directly on a control path — those live in `step`-wrapped side effects. This is why HITL is modeled as a hook the runner supplies: inline it's a promise, durably it's a signal, and the loop doesn't care which.
 
 <Callout type="warn" title="The suspend detail">
 There is deliberately **no** `try/finally` closing the sink around the loop. A durable runner suspends by *throwing* through the stack at `awaitApproval`; a `finally` would then close the live stream on every suspend. The stream is closed only on normal completion — so a suspended-then-resumed run keeps one continuous token stream.
@@ -81,7 +83,7 @@ There is deliberately **no** `try/finally` closing the sink around the loop. A d
 Delegation runs a **nested** in-process loop on a transient sub-thread. A nested sub-agent has no human to prompt, so its `action` tools are auto-declined rather than left hanging.
 
 <Callout type="info">
-The inline runner is single-replica: pending approvals and the token sink live in process memory. Horizontal scaling and crash-survival are the job of the durable runner — see the [Roadmap](/docs/agent/roadmap).
+The inline runner is single-replica: pending approvals and the token sink live in process memory. Horizontal scaling and crash-survival are the job of the [durable runner](/docs/agent/durability/durable-runner) (and the [Redis sink](/docs/agent/redis-streaming) for the stream).
 </Callout>
 
 ## Diagnostics

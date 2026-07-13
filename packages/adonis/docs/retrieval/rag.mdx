@@ -1,0 +1,111 @@
+---
+title: RAG & retrieval
+description: Ground the agent in your own corpus — the Retriever, EmbeddingProvider, and Reranker SPIs, the memory and pgvector retrievers, and always-on "inject" retrieval that folds cited passages into the system prompt.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+Retrieval-augmented generation lets the agent answer from *your* documents instead of just the model's training data. `@adonis-agora/agent` ships a small RAG stack behind three seams — a **retriever**, an **embedding provider**, and an optional **reranker** — plus two bundled retrievers (in-memory and pgvector) and an always-on "inject" mode wired straight into the agent loop.
+
+## The seams
+
+Three provider-agnostic SPIs, all exported from the package root:
+
+| SPI | Method | Role |
+| --- | --- | --- |
+| `Retriever` | `retrieve(query, options?) → Passage[]` | The black box the loop asks for the passages most relevant to a query — vector search, keyword, hybrid, or a remote service. |
+| `EmbeddingProvider` | `embed(texts) → number[][]` | Turns text into vectors, batched (one vector per input, same order), for both ingestion and query. |
+| `Reranker` | `rerank(query, passages, options?) → Passage[]` | Re-scores first-stage passages with a stronger (usually cross-encoder) model. |
+
+A retrieved `Passage` is `{ id, text, score, source?, metadata? }` — `source` is the human/citation-facing origin and `score` is impl-defined relevance.
+
+<Callout type="info" title="Embedding & reranker adapters are bring-your-own">
+The `EmbeddingProvider` and `Reranker` are SPIs — the bundled retrievers take whichever embedder you pass. A first-party `aiSdkEmbedding` adapter over the Vercel AI SDK's `embedMany` (and provider rerankers) are deferred this round, so wire your own `embed(...)`, or use the deterministic `FakeEmbeddingProvider` / `FakeReranker` / `inMemoryRetriever` from [`@adonis-agora/agent/testing`](/docs/agent/testing) for offline work.
+</Callout>
+
+## The bundled retrievers
+
+Build one with the `retrievers` factory namespace (a lazy thunk, like `stores`):
+
+<Tabs items={['memory', 'pgvector']}>
+
+<Tab value="memory">
+
+```ts title="config/agent.ts"
+import { defineConfig, retrievers } from '@adonis-agora/agent'
+
+export default defineConfig({
+  model: () => aiSdkModel(openai('gpt-4o-mini')),
+  retriever: retrievers.memory({
+    embedder: myEmbedder, // an EmbeddingProvider (or a lazy factory)
+    documents: [
+      { id: 'faq', text: 'Long support FAQ text…', source: 'faq.md' },
+    ],
+    chunkSize: 800, // default
+    overlap: 100, // default
+  }),
+})
+```
+
+`retrievers.memory` is cosine similarity over a `Map` — single-process, no infrastructure. Perfect for tests and small/embedded corpora. `documents` are chunked, embedded, and indexed at boot; omit them to ingest at runtime instead.
+
+</Tab>
+
+<Tab value="pgvector">
+
+```ts title="config/agent.ts"
+import { defineConfig, retrievers } from '@adonis-agora/agent'
+
+export default defineConfig({
+  model: () => aiSdkModel(openai('gpt-4o-mini')),
+  retriever: retrievers.pgvector({
+    embedder: myEmbedder,
+    table: 'agent_rag_chunks', // default
+    dimension: 1536, // must match your embedding model
+    metric: 'cosine', // 'l2' | 'inner' also supported
+  }),
+})
+```
+
+The production store — cosine/L2/inner similarity over a `vector(N)` column via `@adonisjs/lucid` + pgvector. See [pgvector store](/docs/agent/retrieval/pgvector) for the migration and full config.
+
+</Tab>
+
+</Tabs>
+
+## Inject mode — always-on retrieval
+
+Setting `retriever` in the config turns on **inject mode**: before the turn, the loop retrieves once for the user message and folds the passages into the system prompt as a numbered, citable block:
+
+```text
+<retrieved_context>
+[1] (faq.md) …passage text…
+[2] (faq.md) …passage text…
+</retrieved_context>
+Use the retrieved context above to answer when relevant, and cite sources by their bracket number.
+```
+
+- `retrievalTopK` controls how many passages are requested per run (default `5`).
+- Retrieval runs **inside `hooks.step`**, so under the [durable runner](/docs/agent/durability/durable-runner) a replay reuses the exact same passages deterministically.
+- The retrieval is recorded as a synthetic `auto_executed` `retrieve` tool call on the first assistant message, so it shows up in the transcript and the [governance read-model](/docs/agent/governance/read-model) like any other tool call.
+
+<Callout type="info" title="Inject vs. agentic retrieval">
+Inject mode retrieves *every* turn, up front. If you'd rather let the model **decide** when to search, don't set `retriever` — instead author a `read` [tool](/docs/agent/authoring/tools) that calls `retriever.retrieve(...)` itself. That's agentic retrieval; the loop sets nothing and the model calls the tool when it needs context. The two modes compose.
+</Callout>
+
+## Ingestion helpers
+
+For runtime ingestion (outside the factory's boot-time `documents`), the RAG helpers are exported from the root:
+
+```ts
+import { chunkDocuments, ingestDocuments, MemoryVectorStore } from '@adonis-agora/agent'
+
+const store = new MemoryVectorStore()
+await ingestDocuments(
+  [{ id: 'policy', text: '…', source: 'policy.pdf' }],
+  { embedder: myEmbedder, store, chunkSize: 800, overlap: 100 },
+)
+```
+
+To index files from a media library automatically, see [RAG media ingestion](/docs/agent/retrieval/media-ingestion).

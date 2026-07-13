@@ -1,0 +1,62 @@
+---
+title: Attachments & multimodal
+description: Let users attach images and PDFs to a message so a vision-capable model sees them natively — the MessageAttachment shape, the attachment-staging SPI, and the optional POST /agent/attachments upload route.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+A user can attach an image or PDF to a chat message so a vision-capable model sees it natively. The library stays provider-agnostic: it passes a URL straight through as the model's image/file part and **never fetches bytes itself** — turning an uploaded file into a model-reachable URL is the app's job, behind the attachment-staging seam.
+
+## The attachment shape
+
+Every attachment is a `MessageAttachment`:
+
+```ts
+interface MessageAttachment {
+  mediaId: string      // stable id in your media store — provenance + replay key
+  url: string          // a URL the model provider can fetch at turn time
+  contentType: string  // image/* → image part, otherwise → file part
+  name: string         // original filename
+}
+```
+
+A client sends attachments on the `POST /agent/chat` body:
+
+```json
+{ "message": "What's wrong with this diagram?", "attachments": [ { "mediaId": "…", "url": "…", "contentType": "image/png", "name": "arch.png" } ] }
+```
+
+They're persisted with the message and replayed as-is; the AI SDK adapter renders each as a native model content part (`image/*` → image part, otherwise → file part).
+
+<Callout type="warn" title="The URL must be reachable by the model provider">
+The lib never downloads bytes — `url` has to be something the provider can fetch: a presigned URL, a proxy, or a `data:` URI. That upload-time work is the staging seam below.
+</Callout>
+
+## The staging seam & upload route
+
+`AttachmentStagingStore` is a one-method seam — `stage(input) → MessageAttachment` — that persists uploaded bytes somewhere fetchable and returns the reference. Wiring it via `attachmentStaging` mounts an optional **`POST /agent/attachments`** upload route:
+
+```ts title="config/agent.ts"
+import { defineConfig, attachmentStores } from '@adonis-agora/agent'
+
+export default defineConfig({
+  model: () => aiSdkModel(openai('gpt-4o')),
+  attachmentStaging: attachmentStores.memory(), // encodes bytes into a data: URL (tests/dev)
+  attachmentMaxBytes: 20 * 1024 * 1024, // default 20 MiB
+  // attachmentAllowedContentTypes: [...] // default: common images + application/pdf + text/*
+})
+```
+
+The route buffers the multipart `file` field, validates it against the size cap (`413` on overflow) and the content-type allow-list (`415` when disallowed), resolves the actor (the same fail-closed resolver as chat), stages it, and returns the `MessageAttachment`. The client then sends that reference on its next `chat` call.
+
+<Callout type="info" title="The route is opt-in">
+Omit `attachmentStaging` and no upload surface is exposed — a client sends already-staged `MessageAttachment` references directly on `chat`. `attachmentStores.memory()` covers tests and dev (it `data:`-encodes the bytes); a real deployment binds its own store presigning against S3/GCS or wrapping the host's media pipeline.
+</Callout>
+
+## The flow
+
+1. Client `POST`s a file to `/agent/attachments` → receives a `MessageAttachment`.
+2. Client `POST`s to `/agent/chat` with `{ message, attachments: [ …that reference… ] }`.
+3. The loop persists the attachment with the user message and passes each `url` to the model as a native image/file part.
+
+To index uploaded files into RAG instead of (or as well as) attaching them to a turn, see [RAG media ingestion](/docs/agent/retrieval/media-ingestion).

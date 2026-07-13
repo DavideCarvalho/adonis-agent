@@ -1,0 +1,33 @@
+---
+title: Telescope "Agent" tab
+description: Add a first-party Telescope extension — an "Agent" dashboard surfacing recent runs, tool calls, approvals, delegations, and token usage, read from the agora:agent:* diagnostics the agent already publishes.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+`agentTelescopeExtension` is the first-class [`@adonis-agora/telescope`](/docs/telescope) extension for the agent — an **"Agent" dashboard** surfacing recent runs, tool calls, approval decisions, delegations, and token usage. It lives on the `@adonis-agora/agent/telescope` subpath.
+
+## Wire it
+
+```ts title="config/telescope.ts"
+import { defineConfig } from '@adonis-agora/telescope'
+import { agentTelescopeExtension } from '@adonis-agora/agent/telescope'
+
+export default defineConfig({
+  extensions: [agentTelescopeExtension()],
+})
+```
+
+That's it — one line adds the tab.
+
+## How it captures data
+
+<Callout type="info" title="Entirely entry-backed — no watcher, no read-model">
+The agent already publishes `agora:agent:*` lifecycle events onto the diagnostics bus. Telescope's generic diagnostics watcher records them as `type: 'diagnostic'`, `tag: 'lib:agent'`, and the extension's data providers read those recorded entries. The extension contributes **no watcher and no entry type** — the "Agent" dashboard is the entry point. `@adonis-agora/telescope` stays an optional, never-imported peer; the returned object structurally satisfies its `TelescopeExtension` contract.
+</Callout>
+
+The panels bind to these providers: active runs, token usage, tool-call success rate, runs / tokens / tool-calls / delegations over time, and recent runs / tool calls / approvals / delegations.
+
+## Live vs. durable
+
+The Telescope tab shows **live activity** off the diagnostics stream — in-flight runs, streaming tool calls, forbidden attempts. For the durable, restart-surviving *history* and cost analytics, use the [governance read-model](/docs/agent/governance/read-model) and the [dashboard SPA](/docs/agent/governance/dashboard). The two are complementary surfaces over the same agent.

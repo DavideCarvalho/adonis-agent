@@ -62,9 +62,9 @@ Authorization runs **twice** through the same `can(actor, tool)`, which is what 
 `DefaultToolAuthorizer` is a thin, explicitly-named binding over core's `DefaultRolesPolicy`. Apps that want an ability-aware gate swap only the binding, never the seam — so both filter layers pick up the new policy automatically.
 </Callout>
 
-## Ability-aware authorization (deferred adapter)
+## Ability-aware authorization
 
-Every tool can also declare an `ability` (e.g. `'refund.issue'`). The default role-based policy ignores it, but an *ability-aware* `RolesPolicy` would consult it — e.g. a [`@adonis-agora/authz`](/docs/authz) Bouncer adapter resolving `bouncer.forUser(actor).allows(ability)`. Because `can` may return a promise, an async authz check drops straight into the same seam. That Bouncer adapter is on the [Roadmap](/docs/agent/roadmap); `roles` and `ability` already share the SPI, so you can declare abilities now and light them up later.
+Every tool can also declare an `ability` (e.g. `'refund.issue'`). The default role-based policy ignores it, but an *ability-aware* `RolesPolicy` consults it — and one ships: the [`@adonis-agora/authz`](/docs/authz) Bouncer adapter, `authzToolAuthorizer`, which checks each tool's `ability` through authz, tenant-scoped and fail-closed. Because `can` may return a promise, the async authz check drops straight into the same seam — both filter layers pick it up. Swap it in via `authorizer`; see [Authz (Bouncer) adapter](/docs/agent/governance/authz-bouncer). `roles` and `ability` share the SPI, so you can declare abilities now and switch the policy anytime.
 
 ## What governance covers
 

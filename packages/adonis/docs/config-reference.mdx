@@ -49,11 +49,35 @@ export default defineConfig({
 
 ### `sink`
 
-`TokenStreamSink | () => TokenStreamSink`. The live token transport (data plane). **Defaults to the in-process sink** (`InProcessTokenStreamSink`), which buffers per run so a client can re-attach.
+`TokenStreamSink | SinkFactory`. The live token transport (data plane). **Defaults to the in-process sink** (`InProcessTokenStreamSink`), which buffers per run so a client can re-attach. Use `tokenSinks.redis({...})` (aliased `streamTransports.redis`) for the multi-replica Redis sink so any pod serves any run's SSE stream. See [Multi-replica streaming](/docs/agent/redis-streaming).
 
 ### `quota`
 
-`QuotaStore | () => QuotaStore`. The daily token budget. **Omit to disable quotas** (fail-open on budget). When set, the budget is checked before the model runs (fail-closed). See [Quota & cost](/docs/agent/governance/quota-and-cost).
+`QuotaStore | QuotaFactory`. The daily token budget. **Omit to disable quotas** (fail-open on budget). When set, the budget is checked before the model runs (fail-closed). Use `quotas.ledger({ limitTokens })` to enforce off the persisted usage ledger, or `quotas.memory({ limitTokens })` for a single-process budget. See [Quota & cost](/docs/agent/governance/quota-and-cost).
+
+### `pricingStore`
+
+`AgentPricingStore | PricingFactory`. Prices each turn's tokens into the assistant message's `usage.costUsd`. A provider-reported (gateway) cost always wins; otherwise the loop estimates from this store's current price rows. **Omit → `costUsd` is always `null`** (never a fabricated `0`). Use `pricingStores.lucid()` (the SQL `agent_model_pricing` table) or `pricingStores.memory()`. See [Quota & cost](/docs/agent/governance/quota-and-cost).
+
+### `governanceQueries`
+
+`AgentGovernanceQueries | GovernanceQueriesFactory`. The read-model the optional `/agent/governance/*` routes serve from — cost/usage rollups, run lifecycle, tool stats, reliability, and the approvals inbox. Pass a lazy `governanceQueries.lucid()` (which prices rollups against `pricingStore`). **Omit → the governance routes aren't mounted.** See [Governance read-model](/docs/agent/governance/read-model).
+
+### `retriever` / `retrievalTopK`
+
+`retriever`: `Retriever | RetrieverFactory`. Enables always-on ("inject") RAG — before each turn the loop retrieves passages for the user message and folds them into the system prompt. Use `retrievers.pgvector({...})` or `retrievers.memory({...})`. **Omit → no injection.** `retrievalTopK`: `number` — how many passages inject-mode requests per run (**default `5`**). See [RAG & retrieval](/docs/agent/retrieval/rag).
+
+### `attachmentStaging` / `attachmentMaxBytes` / `attachmentAllowedContentTypes`
+
+`attachmentStaging`: `AttachmentStagingStore | AttachmentStagingFactory`. Upload-side seam for message attachments (image/PDF). When set, the provider mounts `POST /agent/attachments`. Use `attachmentStores.memory()` for tests, or your own store. **Omit → no upload route.** `attachmentMaxBytes`: per-file cap (**default 20 MiB**). `attachmentAllowedContentTypes`: allowed upload types (**default** common images + `application/pdf` + `text/*`). See [Attachments & multimodal](/docs/agent/authoring/attachments).
+
+### `actorDirectory`
+
+`ActorDirectory | ActorDirectoryFactory`. Read-side lookup from opaque `actorRef`s to human display labels for governance/dashboard surfaces (the read dual of `actorResolver`). Use `actorDirectories.memory({ labels })` or your own. **Omit → surfaces render raw refs.** See [Governance read-model](/docs/agent/governance/read-model#actor-labels).
+
+### `toolTransientRetry`
+
+`ToolTransientRetryOptions | false`. Retries a tool's own invocation in place on a classified-transient error (DB deadlock, lock-wait timeout, serialization failure). **Default ON** (`{ attempts: 2, backoffMs: 150 }`); pass `{ classify }` to change the rule, or `false` to disable. Non-transient failures are never retried. See [Transient tool retries](/docs/agent/authoring/transient-retry).
 
 ### `authorizer` / `rolesPolicy`
 
@@ -77,7 +101,7 @@ Leaving `actorResolver` unset makes every actor-scoped route reply `401`. This i
 
 ### `durable`
 
-`boolean`. Run each turn as a durable workflow instead of in-process. **Deferred — not yet supported.** Setting `true` logs a warning and falls back to the inline runner. See the [Roadmap](/docs/agent/roadmap).
+`boolean`. Run each turn as a replay-safe durable workflow (over [`@adonis-agora/durable`](/docs/durable)) instead of in-process: LLM/tool steps become memoized checkpoints, HITL approval suspends on a signal (resuming across a restart), and delegation is a tracked child run. **Requires `@adonis-agora/durable` installed and configured** (`config/durable.ts`); if it can't be wired the provider logs a warning and falls back to the inline runner, so setting it is always safe. See [The durable runner](/docs/agent/durability/durable-runner).
 
 ### `agents`
 

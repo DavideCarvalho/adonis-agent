@@ -43,7 +43,12 @@ Each infrastructure seam has an in-memory implementation of the same SPI:
 | `InMemoryAgentStore` | `AgentStore` | The behavioral twin of the [Lucid store](/docs/agent/stores/lucid) — threads, messages, tool calls, usage. |
 | `InMemoryTokenStreamSink` | `TokenStreamSink` | Buffers and replays deltas per run, so you can assert on streamed text. |
 | `InMemoryQuotaStore` | `QuotaStore` | A single-process daily quota for exercising the fail-closed budget gate. |
-| `InMemoryGovernanceQueries` | `AgentGovernanceQueries` | The read-model (spend by model/actor, usage trend, recent tool calls/threads) over in-memory data, with a settable `InMemoryModelPrice` table. |
+| `InMemoryGovernanceQueries` | `AgentGovernanceQueries` | The read-model (spend by model/actor, usage trend, runs, tool stats, reliability, approvals) over in-memory data, with a settable `InMemoryModelPrice` table. |
+| `InMemoryPricingStore` | `AgentPricingStore` | An in-memory model pricing table for exercising the cost fold. |
+| `InMemoryActorDirectory` | `ActorDirectory` | A fixed `actorRef → label` map for governance-surface tests. |
+| `InMemoryAttachmentStagingStore` | `AttachmentStagingStore` | Stages uploaded bytes into a `data:` URL — exercises the attachments route offline. |
+| `FakeEmbeddingProvider` / `FakeReranker` / `inMemoryRetriever` | RAG SPIs | Deterministic embedding, reranking, and an in-memory retriever for RAG tests. |
+| `FakeMediaManager` / `fakePdfExtractor` / `inMemoryMediaRagIngestion` | media→RAG | Drive [media ingestion](/docs/agent/retrieval/media-ingestion) with no media library or PDF peer. |
 
 ```ts
 import {

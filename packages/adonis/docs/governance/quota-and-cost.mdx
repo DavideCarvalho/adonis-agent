@@ -26,18 +26,18 @@ The loop uses it in two places:
 The `day` (`YYYY-MM-DD`, UTC) is stamped once by the runner and threaded through the loop, so quota-by-day stays deterministic under replay.
 
 <Callout type="warn" title="Quota is opt-in, and off means open">
-Omit `quota` in the config and quotas are **disabled** — the loop skips the check and bump entirely (fail-open on budget). When you *do* configure a quota store, the budget gate is fail-closed. Wire one to enforce spend limits:
+Omit `quota` in the config and quotas are **disabled** — the loop skips the check and bump entirely (fail-open on budget). When you *do* configure a quota store, the budget gate is fail-closed. Wire one with the `quotas` factory to enforce spend limits:
 
 ```ts title="config/agent.ts"
-import { InMemoryQuotaStore } from '@adonis-agora/agent/testing'
+import { defineConfig, quotas } from '@adonis-agora/agent'
 
 export default defineConfig({
   // ...
-  quota: () => new InMemoryQuotaStore(/* daily limit */),
+  quota: quotas.ledger({ limitTokens: 1_000_000 }), // enforce off the persisted usage ledger
 })
 ```
 
-The in-memory quota store is single-process (great for tests and small apps); a distributed store (e.g. Redis) is a natural custom implementation of the same two methods.
+`quotas.ledger` enforces the budget off the persisted token-usage ledger (one source of truth across replicas); `quotas.memory({ limitTokens })` is a single-process budget for tests and small apps. Any custom `QuotaStore` (e.g. a bespoke Redis counter) satisfies the same two methods.
 </Callout>
 
 A client reads its remaining budget from `GET /agent/quota/today`, which returns `{ usedTokens }` for the actor — summed from the usage ledger over the UTC day.
@@ -60,13 +60,13 @@ There are two ways a turn gets a dollar figure:
 
 1. **The provider reports it.** A gateway knows the real spend. The AI SDK adapter reads the [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) shape (`providerMetadata.gateway.cost`) and OpenRouter (`total_cost`), and persists it verbatim as `cost_usd`. The governance read-model uses this figure as-is.
 
-2. **Estimated from the pricing table.** A direct provider (Anthropic / OpenAI / Bedrock) reports only tokens. For those, cost is estimated from the `agent_model_pricing` table:
+2. **Estimated from the pricing table.** A direct provider (Anthropic / OpenAI / Bedrock) reports only tokens. When you configure a `pricingStore` (`pricingStores.lucid()`), cost is estimated from the `agent_model_pricing` table (the current price rows are fetched once per run and folded into `usage.costUsd`):
 
    ```text
    cost = inputTokens/1e6 * inputPricePer1m + outputTokens/1e6 * outputPricePer1m
    ```
 
-   against the *current* pricing row for the model. An unpriced model contributes **0** cost — its tokens still count toward quota and totals, it just has no dollar estimate until you add a pricing row.
+   against the *current* pricing row for the model. With no `pricingStore` bound, or for a model with no price row, `cost_usd` stays **`null`** (never a fabricated `0` — a real $0 turn and "we don't know" stay distinguishable); the tokens still count toward quota and totals. Seed prices once with `seedModelPrices(store, [...])`.
 
 ### The pricing table
 
@@ -82,6 +82,6 @@ There are two ways a turn gets a dollar figure:
 
 Seed it with the current prices for the models you use; leave it empty and you still get token accounting, just no cost estimate.
 
-## The governance read-model (deferred surfaces)
+## The governance read-model
 
-Cost/usage aggregation lives behind one interface, `AgentGovernanceQueries` — `spendByModel`, `spendByActor`, `usageTrend`, `recentToolCalls`, `recentThreads` — so a dashboard and a Telescope tab can consume the same rolled-up numbers. The in-memory implementation ships in the [testing kit](/docs/agent/testing); a Lucid read-model and the governance dashboard / Telescope "Agent" tab that consume it are on the [Roadmap](/docs/agent/roadmap).
+Cost/usage aggregation lives behind one interface, `AgentGovernanceQueries` — `spendByModel`, `spendByActor`, `usageTrend`, run lifecycle, tool stats, reliability, and the approvals inbox — so a dashboard and a Telescope tab can consume the same rolled-up numbers. Wire `governanceQueries.lucid()` to mount the `/agent/governance/*` routes (priced against the same `pricingStore`), and consume them from the [dashboard SPA](/docs/agent/governance/dashboard) or the [Telescope tab](/docs/agent/governance/telescope). The in-memory implementation ships in the [testing kit](/docs/agent/testing). See [Governance read-model](/docs/agent/governance/read-model).

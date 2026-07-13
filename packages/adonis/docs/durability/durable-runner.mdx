@@ -1,0 +1,70 @@
+---
+title: The durable runner
+description: Run each turn as a replay-safe @adonis-agora/durable workflow — memoized LLM/tool steps, HITL approval that suspends on a signal and survives restarts, and delegation as a tracked child workflow. One config flag.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+The [agent loop](/docs/agent/concepts/agent-loop) was written against a hooks seam precisely so the *same* loop body can run in-process **or** as a durable workflow. The durable runner is now shipped: flip one flag and each turn becomes a replay-safe [`@adonis-agora/durable`](/docs/durable) workflow — LLM turns and tool executions become memoized steps, a HITL approval suspends the run on a signal (resuming across a restart), and sub-agent delegation becomes a tracked child run.
+
+## Turn it on
+
+```ts title="config/agent.ts"
+export default defineConfig({
+  model: () => aiSdkModel(openai('gpt-4o-mini')),
+  store: 'lucid',
+  stores: { lucid: stores.lucid() },
+  actorResolver: new AuthActorResolver(),
+  durable: true,
+})
+```
+
+`durable: true` requires `@adonis-agora/durable` installed and configured (`config/durable.ts`). The provider resolves the durable `WorkflowEngine` from the container, registers the agent workflow on it, and swaps `InlineAgentRunner` for `DurableAgentRunner`.
+
+<Callout type="info" title="Setting it is always safe">
+If the durable peer can't be wired — not installed, engine unresolvable, any wiring error — the provider logs a warning and **falls back to the in-process (inline) runner** rather than breaking boot. So `durable: true` never takes your app down; worst case it runs inline.
+</Callout>
+
+## What each hook maps to
+
+The runner supplies the loop's hooks; the durable versions map onto durable primitives:
+
+| Hook | Inline runner | Durable runner |
+| --- | --- | --- |
+| `step(name, fn)` | calls `fn()` directly | `ctx.localStep(name, fn)` — every LLM turn, tool execution, and persist/quota write is a memoized checkpoint; replay returns the saved result |
+| `awaitApproval(call)` | resolves an in-memory promise | `ctx.waitForSignal('tool:<runId>:<callId>')` — the run **suspends** on approval and resumes on the signal, surviving restarts |
+| `runAgent(name, task)` | nested in-process loop | `ctx.child(AgentRunWorkflow, …)` — delegation is a tracked child run streaming into the parent's sink |
+| `openSink()` | the in-process sink | the run's own sink (top-level) or a child writer that forwards into the parent's stream |
+
+Because every side effect goes through `step`, a recovered run returns completed steps' saved results instead of re-running them — no double writes, no re-streaming, stable ids. The `day` is stamped once by the runner so quota-by-day stays stable across a replay.
+
+## HITL that survives a deploy
+
+Under the inline runner an `action`-tool approval resolves a promise in process memory — so it's single-replica and dies with the process. Under the durable runner the same approval is a **durable signal** namespaced `tool:<runId>:<toolCallId>`, delivered via `runner.signal(...)` (the `POST /agent/tool-call/approve` route). The run can wait minutes or a month across restarts and deploys, then resume exactly where it paused. One run's approval can never cross-resolve another's.
+
+<Callout type="warn" title="Suspend is a throw, not a return">
+The durable runner suspends by *throwing* a control-flow signal (`WorkflowSuspended` / `ContinueAsNew`) up through `awaitApproval` or `ctx.child`. The loop deliberately has no `try/finally` closing the sink, so a suspend doesn't cut the live token stream — an approved-then-resumed run keeps one continuous SSE stream. `DurableAgentRunner.start` returns the run id immediately even when the run suspends synchronously on its first step.
+</Callout>
+
+## Run lifecycle & cancellation
+
+Each run (parent and every child) records its own `agent_run` row with a `durable: true` flag, tracked through `running → completed | failed | cancelled`. `cancel(runId)` cascades cancellation to children and settles the run row `cancelled` (first-terminal: a run that already completed stays put). This is the same lifecycle the [governance read-model](/docs/agent/governance/read-model) surfaces.
+
+## Advanced wiring
+
+`@adonis-agora/agent/durable` exports the pieces the provider uses, for a custom host:
+
+```ts
+import {
+  DurableAgentRunner,
+  AgentRunWorkflow,
+  registerAgentWorkflow,
+  setDurableAgentContext,
+} from '@adonis-agora/agent/durable'
+
+setDurableAgentContext({ factory, store })
+registerAgentWorkflow(engine)
+const runner = new DurableAgentRunner(engine, store)
+```
+
+The SSE contract, the routes, and the governance surfaces are all unchanged — the durable runner is a drop-in behind the same `AgentService`.

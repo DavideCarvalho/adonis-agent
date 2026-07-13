@@ -1,4 +1,11 @@
 {
   "title": "Governance",
-  "pages": ["authorization", "quota-and-cost"]
+  "pages": [
+    "authorization",
+    "authz-bouncer",
+    "quota-and-cost",
+    "read-model",
+    "dashboard",
+    "telescope"
+  ]
 }

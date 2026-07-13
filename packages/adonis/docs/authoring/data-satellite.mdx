@@ -1,0 +1,70 @@
+---
+title: Governed SQL (data satellite)
+description: Give the agent a single, fail-closed read-only SQL tool — dataTool validates one SELECT, enforces a table allow-list, rewrites in a tenant scope, injects a LIMIT, and truncates oversized results.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+`dataTool` is a ready-made **governed read-only SQL tool** — a first-class way to let the agent answer questions about real data without handing it the database. Every call is validated as a single `SELECT`, checked against a table allow-list, tenant-scoped, `LIMIT`-capped, and size-truncated before a row leaves your app. It's exported from the package root (and the `@adonis-agora/agent/data` subpath).
+
+## Register it
+
+`dataTool(config)` returns a branded functional [tool](/docs/agent/authoring/tools), so register it in the config `tools` array or export it from an `app/agent_tools` module:
+
+```ts title="config/agent.ts"
+import { defineConfig, dataTool } from '@adonis-agora/agent'
+import db from '@adonisjs/lucid/services/db'
+
+export default defineConfig({
+  model: () => aiSdkModel(openai('gpt-4o-mini')),
+  tools: [
+    dataTool({
+      db: db.connection('readonly'), // point at a read-only connection/replica
+      tableAccess: {
+        // two-layer role → group → table allow-list — REQUIRED (fail-closed, no allow-all)
+        roleGroups: { MEMBER: ['sales'], ADMIN: ['sales', 'ops'] },
+        tablesByGroup: { sales: ['orders', 'products'], ops: ['audit_log'] },
+      },
+      tenant: { tenantColumn: 'tenant_id', scopedTables: ['orders'] }, // per-row tenant constraint
+      maxRows: 100, // LIMIT injected when the query has none
+    }),
+  ],
+})
+```
+
+The model sees a tool named `executeSql` (override with `name`) whose input is `{ sql: string }` — "a single read-only MySQL SELECT statement".
+
+## The pipeline
+
+Every call runs the same fail-closed pipeline:
+
+1. **Validate** — parse and assert the statement is a single `SELECT` (no `INSERT`/`UPDATE`/`DELETE`/DDL, no multi-statement).
+2. **Table access** — every referenced table must pass `tableAccess.canAccess(actor.roles, table)`; a forbidden table throws with the roles and tables named. There is **no implicit allow-all** — `tableAccess` is required.
+3. **Tenant scope** — if `tenant` is configured, rewrite the query to constrain tenant-scoped tables to `ctx.actor.tenantRef`.
+4. **Inject `LIMIT`** — cap unbounded queries at `maxRows` (default 100).
+5. **Run** — through your read-only `db.rawQuery` (or a custom `runner`), normalizing whatever the driver returns.
+6. **Truncate** — if the serialized rows would exceed ~256 KB, keep the prefix and flag `truncated: true`, so one tool result can't blow the model's context.
+
+The result is `{ rows, rowCount, sql, truncated? }` — `rowCount` is the true count even when `rows` is truncated, and `sql` is the final rewritten query.
+
+<Callout type="warn" title="Tenant pass-through is deliberate">
+A strictly-`undefined` `tenantRef` is the privileged pass-through (all tenants); a `null` or empty one is **not** coerced to undefined — that would leak every tenant's rows. Give privileged callers no `tenantRef` and everyone else a real one.
+</Callout>
+
+## Configuration
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `db` / `runner` | — | Read-only Lucid handle (structural) **or** a custom `QueryRunner`. One is required. |
+| `tableAccess` | — | Table allow-list — a `TableAccessPolicy`, or a `GroupTableAccessConfig` (`{ roleGroups, tablesByGroup }` — roles map to groups, groups to tables). **Required.** |
+| `tenant` | — | Per-row tenant constraint (`{ tenantColumn, scopedTables }`) injected before the query runs. |
+| `maxRows` | `100` | Row cap injected when the query has no `LIMIT`. |
+| `statementTimeoutMs` | off | Reject if the runner hasn't resolved in time (soft guard — pair with a DB-level statement timeout for a hard cap). |
+| `name` | `executeSql` | Tool name the model sees. |
+| `roles` / `ability` | config defaults | Spec-level [governance](/docs/agent/governance/authorization) on the tool itself. |
+
+<Callout type="info" title="Two governance layers, not one">
+`roles`/`ability` gate *whether the model may call the tool at all* (the standard [authorization](/docs/agent/governance/authorization) seam); `tableAccess` and `tenant` gate *what a permitted call may read*. Defense-in-depth — a leaked tool call still can't read a table the actor's role isn't allowed. `node-sql-parser` is imported lazily on the first call, so it stays an optional peer.
+</Callout>
+
+The building blocks — `SqlValidator`, `GroupTableAccessPolicy`, `TenantScopeRewriter`, `injectLimit`, `loadSqlParser` — are exported too, if you want to assemble a bespoke variant.

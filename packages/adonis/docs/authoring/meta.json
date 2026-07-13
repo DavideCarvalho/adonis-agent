@@ -1,4 +1,4 @@
 {
   "title": "Authoring",
-  "pages": ["tools", "personas-and-agents"]
+  "pages": ["tools", "personas-and-agents", "attachments", "data-satellite", "transient-retry"]
 }

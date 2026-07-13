@@ -1,0 +1,55 @@
+---
+title: Governance dashboard
+description: Mount @adonis-agora/agent-dashboard — a read-only React governance console served by a thin AdonisJS provider, gated by the same actor resolver as the governance routes.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+`@adonis-agora/agent-dashboard` is a **separate package**: a dependency-light React SPA that visualizes the agent's own [governance read-model](/docs/agent/governance/read-model) — spend by model and by actor, the daily usage/cost trend, recent runs, threads and tool calls, a reliability panel, an approvals inbox, and today's quota. It's a pure consumer of the agent provider's *real* routes; the provider that serves it is a thin static server, no bundled API.
+
+## Install & mount
+
+```bash
+node ace add @adonis-agora/agent-dashboard
+```
+
+Register the provider **after** the agent provider in `adonisrc.ts`:
+
+```ts title="adonisrc.ts"
+providers: [
+  () => import('@adonis-agora/agent/agent_provider'),
+  () => import('@adonis-agora/agent-dashboard'),
+]
+```
+
+The dashboard reads `config/agent.ts` for the agent `path` and `actorResolver`, mounts the SPA at `<agentPath>/dashboard` (default `/agent/dashboard`), and gates every request through the **same** actor resolver as the governance routes — an app that never configured a resolver exposes nothing.
+
+<Callout type="warn" title="It needs the governance read-model">
+The console consumes `/agent/governance/*` and `/agent/quota/today`. Those routes only exist when you've configured `governanceQueries` (and `pricingStore` for cost). Without them the SPA loads but has no data — see [Governance read-model](/docs/agent/governance/read-model).
+</Callout>
+
+## Toggle & relocate
+
+An optional `config('agent').dashboard` block toggles the SPA and overrides its mount path (it reuses the agent's `path` and `actorResolver`, so it stays behind the same gating):
+
+```ts title="config/agent.ts"
+export default defineConfig({
+  // ...
+  dashboard: { enabled: true, path: '/agent/dashboard' },
+})
+```
+
+Set `enabled: false` to keep the routes off entirely.
+
+## Reuse the browser client
+
+The framework-free fetch client is exported for your own UI:
+
+```ts
+import { AgentClient } from '@adonis-agora/agent-dashboard/client'
+
+const client = new AgentClient({ baseUrl: '/agent' })
+const spend = await client.spendByModel({ fromDay: '2026-03-01', toDay: '2026-03-07' })
+```
+
+For a live-activity view (in-flight runs, streaming tool calls) rather than the durable history, see the [Telescope "Agent" tab](/docs/agent/governance/telescope).

@@ -1,0 +1,74 @@
+---
+title: Governance read-model
+description: The read/analytics side of the agent — spend, usage trend, run lifecycle, tool stats, reliability, and a cross-thread approvals inbox over the persisted tables, exposed as /agent/governance/* routes.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Everything the agent does is persisted; the **governance read-model** is the read/analytics side of that data — cost and usage rollups, the run lifecycle, per-tool stats, run reliability, and a cross-thread approvals inbox. It lives behind one interface, `AgentGovernanceQueries`, so the [dashboard SPA](/docs/agent/governance/dashboard) and the [Telescope tab](/docs/agent/governance/telescope) consume the same rolled-up numbers.
+
+<Callout type="info" title="Separate from the store on purpose">
+`AgentStore` owns the write/thread path; `AgentGovernanceQueries` owns the read/analytics path (`agent_token_usage ⋈ agent_model_pricing`, tool calls, threads, runs). A store adapter implements both — the Lucid read-model reads the same tables the Lucid store writes.
+</Callout>
+
+## Wire it
+
+```ts title="config/agent.ts"
+import { defineConfig, stores, pricingStores, governanceQueries } from '@adonis-agora/agent'
+
+export default defineConfig({
+  model: () => aiSdkModel(openai('gpt-4o-mini')),
+  store: 'lucid',
+  stores: { lucid: stores.lucid() },
+  pricingStore: pricingStores.lucid(),
+  governanceQueries: governanceQueries.lucid(),
+})
+```
+
+Configuring `governanceQueries` **mounts the `/agent/governance/*` read routes**. Omit it and they're never mounted (read-only surface; safe to leave off). The factory receives the already-resolved `pricingStore`, so the read-model prices its cost rollups against the *same* live prices the loop's cost fold uses. See [Quota & cost](/docs/agent/governance/quota-and-cost) for pricing.
+
+## The routes
+
+All read-only (`GET`), all authenticated through the **same** actor resolver as the chat routes (governance is cross-actor data). `from`/`to` are inclusive UTC days (`YYYY-MM-DD`); `limit` defaults to `50`, clamped to `200`.
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /agent/governance/spend/model` | Per-model token + cost rollup over the range. |
+| `GET /agent/governance/spend/actor` | Per-actor token + cost rollup over the range. |
+| `GET /agent/governance/usage/trend` | The daily token + cost trend over the range. |
+| `GET /agent/governance/tool-calls/recent` | Newest-first recent tool-call activity feed. |
+| `GET /agent/governance/threads/recent` | Newest-first recent thread activity feed. |
+| `GET /agent/governance/runs` | Filterable, cursor-paginated run list, newest-first. Query: `actor?`, `agent?`, `status?`, `from?`, `to?`, `cursor?`, `limit?`. |
+| `GET /agent/governance/runs/:id` | One run's full trace — run + messages + tool calls + approvals + usage — or `null`. |
+| `GET /agent/governance/approvals/pending` | Cross-thread HITL approvals inbox, oldest first. Query: `actor?`, `limit?`. |
+| `GET /agent/governance/tools/stats` | Per-tool call/failure/rejection/latency rollup. Query: `from?`, `to?`. |
+| `GET /agent/governance/reliability` | Success/failure/cancel rates + mean settled duration. Query: `from?`, `to?`. |
+
+The matching `AgentGovernanceQueries` methods are `spendByModel`, `spendByActor`, `usageTrend`, `recentToolCalls`, `recentThreads`, `listRuns`, `runDetail`, `pendingApprovals`, `perToolStats`, and `runReliability`.
+
+## Run lifecycle tracking
+
+Both runners record each run (turn) to an `agent_run` table through `store.recordRunStart(...)` / `recordRunEnd(...)`, tracked through `running → completed | failed | cancelled` with `stepCount`, token totals, an `error`, and a `durable` flag (true under the [durable runner](/docs/agent/durability/durable-runner)). A run's messages, tool calls, and usage back-reference its `run_id`.
+
+<Callout type="info" title="Run tracking is an additive migration">
+`node ace configure @adonis-agora/agent` publishes a `create_agent_run_tracking` migration alongside the core tables — the `agent_run` table plus the `run_id` back-references. Run it after the base migration. Adapters backed by a store without run recording return an empty page / `null` / zeros from the run-lifecycle methods, so the surface degrades gracefully.
+</Callout>
+
+## Actor labels
+
+Persisted `actorRef`s are opaque by design (no FK into your user table). To render names instead of raw refs on governance surfaces, bind an **actor directory** — the read-side dual of the [actor resolver](/docs/agent/governance/authorization):
+
+```ts title="config/agent.ts"
+import { actorDirectories } from '@adonis-agora/agent'
+
+export default defineConfig({
+  // ...
+  actorDirectory: actorDirectories.memory({ labels: { u_1: 'Ada Lovelace' } }),
+})
+```
+
+`ActorDirectory.resolveDisplay(refs)` returns a `ref → label` map; an unknown ref is simply omitted (surfaces fall back to the raw ref) and it never throws. Bind your own over the host's user table, or omit it entirely.
+
+## In tests
+
+`InMemoryGovernanceQueries` (with a settable `InMemoryModelPrice` table) implements the same SPI over in-memory data, so a test exercises the identical read-model code paths without a database. It's in the [testing kit](/docs/agent/testing).

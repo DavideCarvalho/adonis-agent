@@ -68,6 +68,8 @@ Five tables (names from the `AGENT_TABLES` constant):
 | `agent_token_usage` | the usage ledger: input/output tokens, cache breakdown, `model_id`, `purpose`, and `cost_usd` |
 | `agent_model_pricing` | per-model pricing rows for cost estimation (see [Quota & cost](/docs/agent/governance/quota-and-cost)) |
 
+`configure` also publishes two **additive** migrations run alongside the core five: `create_agent_run_tracking` (the `agent_run` lifecycle table plus `run_id` back-references — see [Governance read-model](/docs/agent/governance/read-model#run-lifecycle-tracking)) and `create_agent_rag_chunks` (the [pgvector](/docs/agent/retrieval/pgvector) RAG chunk table, Postgres-only — delete it if you don't use pgvector RAG).
+
 Threads are indexed on `(actor_ref, updated_at)` for list ordering, messages on `(thread_id, created_at)` for load, and usage on `(actor_ref, created_at)` so the daily quota scan stays fast. Booleans are stored as `INTEGER` (0/1) and timestamps as `BIGINT` epoch-ms — no dialect-only types.
 
 <Callout type="info" title="The model-supplied tool-call id is the primary key">

@@ -1,0 +1,68 @@
+---
+title: pgvector store
+description: The production RAG store — cosine/L2/inner similarity over a vector(N) column on Postgres + pgvector, through @adonisjs/lucid, with a published migration and safe identifier handling.
+---
+
+import { Steps, Step } from 'fumadocs-ui/components/steps';
+import { Callout } from 'fumadocs-ui/components/callout';
+
+`retrievers.pgvector` is the production [retriever](/docs/agent/retrieval/rag): it stores chunk embeddings in a `vector(N)` column and ranks them with pgvector's distance operators over `@adonisjs/lucid`. **Postgres + the `pgvector` extension only.** The Lucid peer is imported lazily inside the factory thunk, so it stays optional.
+
+<Steps>
+<Step>
+
+## Run the migration
+
+`node ace configure @adonis-agora/agent` publishes a `create_agent_rag_chunks` migration alongside the core tables. Apply it (Postgres):
+
+```bash
+node ace migration:run
+```
+
+It provisions the `vector` extension, the chunk table (default `agent_rag_chunks`), and the metric's index opclass.
+
+</Step>
+<Step>
+
+## Wire the retriever
+
+```ts title="config/agent.ts"
+import { defineConfig, retrievers } from '@adonis-agora/agent'
+
+export default defineConfig({
+  model: () => aiSdkModel(openai('gpt-4o-mini')),
+  retriever: retrievers.pgvector({
+    embedder: myEmbedder,
+    dimension: 1536,
+  }),
+  retrievalTopK: 5,
+})
+```
+
+</Step>
+</Steps>
+
+## Configuration
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `embedder` | — | The `EmbeddingProvider` (query + ingestion), or a lazy factory. Required. |
+| `db` | resolved lazily | A structural Lucid DB handle (bring-your-own). Omit to resolve `@adonisjs/lucid`'s default `db` service inside the thunk. |
+| `connection` | default connection | Lucid connection name (used only when `db` is omitted). |
+| `table` | `agent_rag_chunks` | Chunk table name. Validated against a strict identifier regex. |
+| `dimension` | `1536` | Embedding width — **must match the model** (e.g. 1536 for `text-embedding-3-small`). |
+| `metric` | `cosine` | Similarity metric / distance operator (`cosine`, `l2`, `inner`). |
+| `columns` | mirror defaults | Override the physical column names (each validated). |
+| `ensureSchema` | `false` | Provision the extension/table/index at boot (idempotent DDL). Handy for tests; production should run the migration. |
+| `documents` | — | Documents to chunk → embed → upsert at boot. |
+| `chunkSize` / `overlap` | `800` / `100` | Chunking parameters. |
+
+<Callout type="info" title="Identifiers are validated, embeddings are bound">
+The store composes raw SQL for pgvector's operators (Lucid has no native `vector` type), but every table/column name is validated against a strict identifier regex before it is ever spliced in, and the query embedding is passed as a `?::vector` binding — never string-concatenated. Scores are normalized so a higher `score` always means more relevant, across all three metrics.
+</Callout>
+
+## Scores and ranking
+
+Each metric maps to a pgvector operator (`<=>`, `<->`, `<#>`) and an index opclass. The store rewrites the raw distance into a monotonically-increasing relevance `score` on each returned `Passage`, so downstream code (inject-mode context, a reranker, your UI) can treat `score` uniformly regardless of the configured `metric`.
+
+For the in-memory alternative and the retrieval SPIs, see [RAG & retrieval](/docs/agent/retrieval/rag).

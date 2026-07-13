@@ -5,7 +5,7 @@ description: The eleven /agent routes, the byte-for-byte SSE envelope, human-in-
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
-The provider mounts eleven routes under `config.path` (default `agent`) at boot. They cover the full chat lifecycle — start, stream, cancel, HITL, threads, and quota. No controllers to write; the provider resolves the actor, calls the framework-agnostic `AgentService`, and pipes the SSE.
+The provider mounts eleven core routes under `config.path` (default `agent`) at boot. They cover the full chat lifecycle — start, stream, cancel, HITL, threads, and quota. No controllers to write; the provider resolves the actor, calls the framework-agnostic `AgentService`, and pipes the SSE. Two optional route groups mount only when their config is present: `POST /agent/attachments` (when `attachmentStaging` is set — see [Attachments](/docs/agent/authoring/attachments)) and the `/agent/governance/*` read routes (when `governanceQueries` is set — see [Governance read-model](/docs/agent/governance/read-model)).
 
 ## The routes
 
@@ -73,8 +73,8 @@ On approve, the loop runs the tool and continues; the `executed_by_ref` records 
 
 Streams survive a dropped connection. A late subscriber to `GET /agent/chat/:runId/stream` replays the run's buffered chunks first, then follows live until `done`. Combined with the thread's `activeStreamId`, a reloading client can find the in-flight run and rejoin its stream.
 
-<Callout type="warn" title="Single-replica today">
-Re-attach works because the token sink buffers per run in process memory. That makes it single-replica: a run started on one instance can only be re-attached on that same instance. Cross-instance resume is the durable runner's job — see the [Roadmap](/docs/agent/roadmap).
+<Callout type="warn" title="Single-replica by default">
+Re-attach works because the default token sink buffers per run in process memory. That makes it single-replica: a run started on one instance can only be re-attached on that same instance. Switch to the [Redis sink](/docs/agent/redis-streaming) so any pod can serve any run's stream, and pair it with the [durable runner](/docs/agent/durability/durable-runner) for cross-instance resume.
 </Callout>
 
 ## Consuming from React
