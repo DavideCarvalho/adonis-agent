@@ -2,6 +2,7 @@ import { pathToFileURL } from 'node:url';
 import type { HttpContext } from '@adonisjs/core/http';
 import type { ApplicationService } from '@adonisjs/core/types';
 import {
+  type ActorDirectory,
   type ActorResolver,
   type AgentConfig,
   AgentDepsFactory,
@@ -73,6 +74,7 @@ const DEFAULT_ALLOWED_ATTACHMENT_CONTENT_TYPES: readonly string[] = [
 export default class AgentProvider {
   #store: AgentStore | null = null;
   #sink: TokenStreamSink | null = null;
+  #actorDirectory: ActorDirectory | null = null;
 
   constructor(protected app: ApplicationService) {}
 
@@ -125,8 +127,11 @@ export default class AgentProvider {
     const attachmentStaging = await this.#resolveAttachmentStaging(config);
     const authorizer = this.#resolveAuthorizer(config, defaultRoles);
     const actorResolver = config.actorResolver ?? new UnconfiguredActorResolver();
+    // Read-side identity lookup for governance/dashboard surfaces (optional; renders raw refs if unset).
+    const actorDirectory = await this.#resolveActorDirectory(config);
     this.#store = store;
     this.#sink = sink;
+    this.#actorDirectory = actorDirectory;
 
     const factory = new AgentDepsFactory({
       model,
@@ -161,6 +166,7 @@ export default class AgentProvider {
     // holds only per-run buffers that GC with the provider. Drop refs so a hot reload starts clean.
     this.#store = null;
     this.#sink = null;
+    this.#actorDirectory = null;
   }
 
   // ── resolution helpers ────────────────────────────────────────────────────
@@ -186,6 +192,16 @@ export default class AgentProvider {
     const sink = config.sink;
     if (sink === undefined) return new InProcessTokenStreamSink();
     return typeof sink === 'function' ? sink() : sink;
+  }
+
+  /**
+   * Build the read-side actor directory from config (an `ActorDirectoryFactory` thunk or a ready
+   * instance). `undefined` → governance/dashboard surfaces render raw opaque `actorRef`s.
+   */
+  async #resolveActorDirectory(config: AgentConfig): Promise<ActorDirectory | null> {
+    const directory = config.actorDirectory;
+    if (directory === undefined) return null;
+    return typeof directory === 'function' ? directory({ app: this.app }) : directory;
   }
 
   async #resolveQuota(config: AgentConfig, store: AgentStore): Promise<QuotaStore | undefined> {

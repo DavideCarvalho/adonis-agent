@@ -15,6 +15,7 @@ export {
   type InMemoryModelPrice,
 } from './in-memory-governance-queries.js';
 export { InMemoryTokenStreamSink } from './in-memory-sink.js';
+export { InMemoryActorDirectory } from './in-memory-actor-directory.js';
 export { InMemoryQuotaStore } from './in-memory-quota.js';
 export { InMemoryPricingStore } from './in-memory-pricing.js';
 export {

@@ -1,4 +1,5 @@
 import type { BrandedFunctionalTool } from './ai-tool-ref.js';
+import type { ActorDirectory } from './spi/actor-directory.js';
 import type { ActorResolver } from './spi/actor-resolver.js';
 import type { AttachmentStagingStore } from './spi/attachment-staging.js';
 import type { AgentGovernanceQueries } from './spi/governance-queries.js';
@@ -9,14 +10,18 @@ import type { Retriever } from './spi/retriever.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { TokenStreamSink } from './spi/token-stream-sink.js';
 import {
+  actorDirectories,
   attachmentStores,
   governanceQueries,
   pricingStores,
   quotas,
   retrievers,
   stores,
+  streamTransports,
+  tokenSinks,
 } from './stores/factory.js';
 import type {
+  ActorDirectoryFactory,
   AttachmentStagingContext,
   AttachmentStagingFactory,
   EmbeddingFactory,
@@ -25,6 +30,7 @@ import type {
   LucidGovernanceConfig,
   LucidPricingConfig,
   LucidStoreConfig,
+  MemoryActorDirectoryConfig,
   MemoryRetrieverConfig,
   MemoryStoreConfig,
   PricingContext,
@@ -32,10 +38,12 @@ import type {
   QuotaConfig,
   QuotaContext,
   QuotaFactory,
+  RedisTokenSinkConfig,
   RetrieverContext,
   RetrieverFactory,
   StoreContext,
   StoreFactory,
+  TokenSinkFactory,
 } from './stores/factory.js';
 import type { ToolTransientRetrySetting } from './tool-retry.js';
 import type { AgentDefinition } from './types.js';
@@ -73,7 +81,11 @@ export interface AgentConfig {
   store?: string;
   /** Named stores, built with the {@link stores} factory. Provide `lucid` and/or `memory`. */
   stores?: Record<string, StoreFactory>;
-  /** Live token transport, or a lazy factory. Defaults to the in-process sink. */
+  /**
+   * Live token transport ("data plane"), or a lazy factory. Defaults to the in-process sink (single
+   * replica). Use `tokenSinks.redis({...})` (a.k.a. `streamTransports.redis`) for the multi-replica
+   * Redis sink so any pod can serve any run's SSE stream — the SSE envelope is unchanged either way.
+   */
   sink?: TokenStreamSink | SinkFactory;
   /**
    * Daily token budget, or a lazy factory. Omit to disable quotas (fail-open on budget). Use
@@ -132,6 +144,12 @@ export interface AgentConfig {
    * every request — the agent never fabricates a caller. Wire `AuthActorResolver` / `HeaderActorResolver`.
    */
   actorResolver?: ActorResolver;
+  /**
+   * Read-side lookup from opaque persisted `actorRef`s to human display labels for governance/dashboard
+   * surfaces (the read-side dual of {@link AgentConfig.actorResolver}). Pass an {@link ActorDirectory}
+   * instance, or a lazy `actorDirectories.memory({ labels })` factory. Omit → surfaces render raw refs.
+   */
+  actorDirectory?: ActorDirectory | ActorDirectoryFactory;
   /** Route prefix the `/agent/*` routes mount under. Defaults to `'agent'`. */
   path?: string;
   /**
@@ -169,7 +187,17 @@ export function defineConfig(config: AgentConfig): AgentConfig {
   return config;
 }
 
-export { stores, quotas, pricingStores, governanceQueries, retrievers, attachmentStores };
+export {
+  stores,
+  quotas,
+  pricingStores,
+  governanceQueries,
+  retrievers,
+  attachmentStores,
+  tokenSinks,
+  streamTransports,
+  actorDirectories,
+};
 export type {
   StoreContext,
   StoreFactory,
@@ -190,4 +218,8 @@ export type {
   EmbeddingFactory,
   AttachmentStagingContext,
   AttachmentStagingFactory,
+  TokenSinkFactory,
+  RedisTokenSinkConfig,
+  ActorDirectoryFactory,
+  MemoryActorDirectoryConfig,
 };

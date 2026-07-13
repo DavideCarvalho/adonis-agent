@@ -1,5 +1,7 @@
 import type { ApplicationService } from '@adonisjs/core/types';
 import type { IngestDocument } from '../rag/ingest.js';
+import type { RedisStreamClient } from '../redis-stream-client.js';
+import type { ActorDirectory } from '../spi/actor-directory.js';
 import type { AgentStore } from '../spi/agent-store.js';
 import type { AttachmentStagingStore } from '../spi/attachment-staging.js';
 import type { EmbeddingProvider } from '../spi/embedding-provider.js';
@@ -7,6 +9,7 @@ import type { AgentGovernanceQueries } from '../spi/governance-queries.js';
 import type { AgentPricingStore } from '../spi/pricing-store.js';
 import type { QuotaStore } from '../spi/quota-store.js';
 import type { Retriever } from '../spi/retriever.js';
+import type { TokenStreamSink } from '../spi/token-stream-sink.js';
 import type { LucidDatabaseLike } from './lucid.js';
 
 /**
@@ -343,6 +346,186 @@ export const attachmentStores = {
         '../testing/in-memory-attachment-staging.js'
       );
       return new InMemoryAttachmentStagingStore();
+    };
+  },
+};
+
+// ── Token-sink / stream-transport factories ──────────────────────────────────
+
+/**
+ * A configured {@link TokenStreamSink}: a lazy thunk the agent provider calls at boot to build the live
+ * token transport (the "data plane"). Each factory imports its impl — and, for Redis, its optional
+ * driver — inside the thunk, so nothing loads until the sink is actually selected. Assignable to the
+ * `sink` field's `SinkFactory`.
+ */
+export type TokenSinkFactory = () => TokenStreamSink | Promise<TokenStreamSink>;
+
+/** Options for the Redis multi-replica token-stream sink. */
+export interface RedisTokenSinkConfig {
+  /** `@adonisjs/redis` connection name. Omit for the default connection. */
+  connection?: string;
+  /** Key/channel namespace. Defaults to `agent:stream`. */
+  keyPrefix?: string;
+  /**
+   * Bring-your-own {@link RedisStreamClient} adapter (over `ioredis`, `node-redis`, ...). When set, the
+   * `@adonisjs/redis` peer is NOT imported — the factory uses this client directly. Handy for tests and
+   * non-Adonis Redis drivers.
+   */
+  client?: RedisStreamClient;
+}
+
+/**
+ * The token-sink factory namespace used in `config/agent.ts`, mirroring {@link stores}. Also exported as
+ * `streamTransports` (an alias — pick whichever name reads better):
+ *
+ * ```ts
+ * import { defineConfig, tokenSinks } from '@adonis-agora/agent'
+ *
+ * export default defineConfig({
+ *   model: () => aiSdkModel({ model: '...' }),
+ *   sink: tokenSinks.redis({ connection: 'main' }), // multi-replica; any pod serves any run's SSE
+ * })
+ * ```
+ *
+ * Omitting `sink` entirely keeps the in-process sink (single replica); `tokenSinks.memory()` selects it
+ * explicitly. `tokenSinks.redis()` fans a run's tokens across replicas over Redis pub/sub + a replayable
+ * list, keeping the SSE envelope byte-identical. The `@adonisjs/redis` peer is imported ONLY inside the
+ * `redis` thunk, so it stays fully optional.
+ */
+export const tokenSinks = {
+  /** The in-process sink — per-run in-memory buffers, single replica. The default when `sink` is omitted. */
+  memory(): TokenSinkFactory {
+    return async () => {
+      const { InProcessTokenStreamSink } = await import('../in-process-sink.js');
+      return new InProcessTokenStreamSink();
+    };
+  },
+
+  /**
+   * The Redis multi-replica sink: any pod can serve any run's SSE stream. Builds a
+   * {@link RedisStreamClient} over `@adonisjs/redis` (imported lazily here), or uses `config.client` when
+   * provided. Requires `@adonisjs/redis` installed + configured (`config/redis.ts`) unless a `client` is
+   * passed.
+   */
+  redis(config: RedisTokenSinkConfig = {}): TokenSinkFactory {
+    return async () => {
+      const { RedisTokenStreamSink } = await import('../redis-token-stream-sink.js');
+      const client = config.client ?? (await buildAdonisRedisClient(config.connection));
+      return new RedisTokenStreamSink(client, {
+        ...(config.keyPrefix !== undefined ? { keyPrefix: config.keyPrefix } : {}),
+      });
+    };
+  },
+};
+
+/** Alias of {@link tokenSinks}. */
+export const streamTransports = tokenSinks;
+
+/** The minimal `ioredis`-shaped surface the `@adonisjs/redis` adapter drives. Duck-typed (peer is optional). */
+interface IoRedisLike {
+  rpush(key: string, value: string): Promise<number>;
+  lrange(key: string, start: number, stop: number): Promise<string[]>;
+  set(key: string, value: string): Promise<unknown>;
+  get(key: string): Promise<string | null>;
+  publish(channel: string, message: string): Promise<number>;
+  del(...keys: string[]): Promise<number>;
+  duplicate(): IoRedisLike;
+  subscribe(channel: string): Promise<unknown>;
+  unsubscribe(channel: string): Promise<unknown>;
+  on(event: 'message', listener: (channel: string, message: string) => void): unknown;
+  off(event: 'message', listener: (channel: string, message: string) => void): unknown;
+  quit(): Promise<unknown>;
+}
+
+/** The `@adonisjs/redis` manager surface used to reach a connection's underlying `ioredis` client. */
+interface RedisManagerLike {
+  connection(name?: string): { ioConnection: IoRedisLike };
+}
+
+/**
+ * Lazily import `@adonisjs/redis` and adapt its connection to a {@link RedisStreamClient}. The specifier
+ * is held in a variable so TypeScript does NOT resolve the (optional, possibly-uninstalled) module at
+ * build time — it stays a runtime-only dependency. Uses a DEDICATED duplicated connection per subscribe
+ * (a subscribed Redis connection can't run other commands).
+ */
+async function buildAdonisRedisClient(connection?: string): Promise<RedisStreamClient> {
+  const specifier = '@adonisjs/redis/services/main' as string;
+  const mod = (await import(specifier)) as { default: RedisManagerLike };
+  const redis = mod.default;
+  const conn =
+    connection !== undefined ? redis.connection(connection) : redis.connection();
+  return adaptIoRedis(conn.ioConnection);
+}
+
+/** Adapt an `ioredis`-shaped client to {@link RedisStreamClient}, using a duplicated subscriber connection. */
+function adaptIoRedis(io: IoRedisLike): RedisStreamClient {
+  return {
+    rpush: async (key, value) => {
+      await io.rpush(key, value);
+    },
+    lrange: (key, start, stop) => io.lrange(key, start, stop),
+    set: async (key, value) => {
+      await io.set(key, value);
+    },
+    get: (key) => io.get(key),
+    publish: async (channel, message) => {
+      await io.publish(channel, message);
+    },
+    subscribe: async (channel, onMessage) => {
+      const subscriber = io.duplicate();
+      const listener = (incoming: string, message: string) => {
+        if (incoming === channel) {
+          onMessage(message);
+        }
+      };
+      subscriber.on('message', listener);
+      await subscriber.subscribe(channel);
+      return async () => {
+        subscriber.off('message', listener);
+        await subscriber.unsubscribe(channel);
+        await subscriber.quit();
+      };
+    },
+    del: async (...keys) => {
+      await io.del(...keys);
+    },
+  };
+}
+
+// ── Actor-directory factories ────────────────────────────────────────────────
+
+/**
+ * A configured {@link ActorDirectory}: a lazy thunk the agent provider calls at boot to build the
+ * read-side `actorRef → label` lookup governance/dashboard surfaces resolve display names through. Each
+ * factory imports its impl inside the thunk (like {@link stores}).
+ */
+export type ActorDirectoryFactory = (ctx: StoreContext) => ActorDirectory | Promise<ActorDirectory>;
+
+/** Options for the in-memory actor directory. */
+export interface MemoryActorDirectoryConfig {
+  /** Seed `actorRef → display label` mappings. */
+  labels?: Record<string, string>;
+}
+
+/**
+ * The actor-directory factory namespace used in `config/agent.ts`, mirroring {@link stores}:
+ *
+ * ```ts
+ * export default defineConfig({
+ *   actorDirectory: actorDirectories.memory({ labels: { u_1: 'Ada Lovelace' } }),
+ * })
+ * ```
+ *
+ * Omit `actorDirectory` → governance surfaces render raw opaque refs. A real deployment binds its own
+ * directory over the host's user table by passing an instance; `actorDirectories.memory` covers tests,
+ * the offline demo, and small fixed label tables.
+ */
+export const actorDirectories = {
+  /** In-memory `actorRef → label` map — single-process. Handy for tests and dev apps. */
+  memory(config: MemoryActorDirectoryConfig = {}): ActorDirectoryFactory {
+    return async () => {
+      const { InMemoryActorDirectory } = await import('../testing/in-memory-actor-directory.js');
+      return new InMemoryActorDirectory(config.labels ?? {});
     };
   },
 };

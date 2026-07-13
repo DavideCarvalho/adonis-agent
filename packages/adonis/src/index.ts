@@ -10,6 +10,7 @@ export * from './spi/quota-store.js';
 export * from './spi/pricing-store.js';
 export * from './spi/agent-runner.js';
 export * from './spi/actor-resolver.js';
+export * from './spi/actor-directory.js';
 export * from './spi/attachment-staging.js';
 export * from './spi/governance-queries.js';
 export * from './spi/embedding-provider.js';
@@ -53,12 +54,19 @@ export {
   governanceQueries,
   retrievers,
   attachmentStores,
+  tokenSinks,
+  streamTransports,
+  actorDirectories,
 } from './define_config.js';
 export type {
   AgentConfig,
   DefaultAgentOptions,
   ModelFactory,
   SinkFactory,
+  TokenSinkFactory,
+  RedisTokenSinkConfig,
+  ActorDirectoryFactory,
+  MemoryActorDirectoryConfig,
   QuotaFactory,
   QuotaContext,
   QuotaConfig,
@@ -106,6 +114,11 @@ export type { AgentDepsFactoryConfig } from './agent-deps-factory.js';
 export { utcDay } from './agent-deps.js';
 export type { AgentDeps } from './agent-deps.js';
 export { InProcessTokenStreamSink } from './in-process-sink.js';
+export {
+  RedisTokenStreamSink,
+  type RedisTokenStreamSinkOptions,
+} from './redis-token-stream-sink.js';
+export type { RedisStreamClient } from './redis-stream-client.js';
 export {
   UnconfiguredActorResolver,
   HeaderActorResolver,
