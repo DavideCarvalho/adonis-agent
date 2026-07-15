@@ -1,6 +1,6 @@
 import {
+  BaseWorkflow,
   ContinueAsNew,
-  Workflow,
   type WorkflowCtx,
   WorkflowSuspended,
 } from '@adonis-agora/durable';
@@ -69,8 +69,9 @@ function childSinkWriter(inner: SinkWriter): SinkWriter {
  *
  * Instantiated by the engine with no arguments; its deps come from {@link getDurableAgentContext}.
  */
-@Workflow({ name: 'agora.agent.run', version: '1' })
-export class AgentRunWorkflow {
+export class AgentRunWorkflow extends BaseWorkflow {
+  static override workflow = { name: 'agora.agent.run', version: '1' };
+
   async run(ctx: WorkflowCtx, input: DurableAgentRunInput): Promise<{ text: string }> {
     const { factory, store } = getDurableAgentContext();
     const day = input.day ?? utcDay();
