@@ -16,7 +16,12 @@ describe('estimateCost', () => {
 
   it('prices cache-write / cache-read tokens at their own rates (falling back to input rate)', () => {
     const cost = estimateCost(
-      { inputTokens: 1_000_000, outputTokens: 0, cacheWriteTokens: 400_000, cacheReadTokens: 100_000 },
+      {
+        inputTokens: 1_000_000,
+        outputTokens: 0,
+        cacheWriteTokens: 400_000,
+        cacheReadTokens: 100_000,
+      },
       {
         modelId: 'm',
         inputPricePer1m: 3,
@@ -30,7 +35,12 @@ describe('estimateCost', () => {
     expect(cost).toBeCloseTo(3.03, 9);
     // Without cache rates, cache tokens fall back to the input rate → whole 1M input @ $3.
     const fallback = estimateCost(
-      { inputTokens: 1_000_000, outputTokens: 0, cacheWriteTokens: 400_000, cacheReadTokens: 100_000 },
+      {
+        inputTokens: 1_000_000,
+        outputTokens: 0,
+        cacheWriteTokens: 400_000,
+        cacheReadTokens: 100_000,
+      },
       { modelId: 'm', inputPricePer1m: 3, outputPricePer1m: 15, effectiveFrom: '' },
     );
     expect(fallback).toBeCloseTo(3, 9);

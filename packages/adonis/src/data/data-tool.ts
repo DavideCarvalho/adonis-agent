@@ -7,11 +7,11 @@ import { injectLimit } from './limit.js';
 import { loadSqlParser } from './parser.js';
 import { SqlValidator } from './sql-validator.js';
 import {
-  GroupTableAccessPolicy,
   type GroupTableAccessConfig,
+  GroupTableAccessPolicy,
   type TableAccessPolicy,
 } from './table-access.js';
-import { TenantScopeRewriter, type TenantScopeConfig } from './tenant-scope.js';
+import { type TenantScopeConfig, TenantScopeRewriter } from './tenant-scope.js';
 
 /** App-supplied runner over a read-only connection. The package never opens a DB itself. */
 export interface QueryRunner {
@@ -196,7 +196,9 @@ function resolveRunner(config: DataToolConfig): QueryRunner {
   if (config.runner !== undefined) return config.runner;
   const db = config.db;
   if (db === undefined) {
-    throw new Error('dataTool: provide either `db` (a Lucid database handle) or a custom `runner`.');
+    throw new Error(
+      'dataTool: provide either `db` (a Lucid database handle) or a custom `runner`.',
+    );
   }
   return {
     async run(sql: string): Promise<Record<string, unknown>[]> {

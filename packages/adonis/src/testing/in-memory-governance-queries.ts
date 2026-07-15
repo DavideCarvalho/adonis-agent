@@ -271,8 +271,7 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
       // Newest-first, `runId` desc for a stable tiebreak (mirrors the Lucid ordering).
       .sort(
         (left, right) =>
-          right.startedAt.localeCompare(left.startedAt) ||
-          right.runId.localeCompare(left.runId),
+          right.startedAt.localeCompare(left.startedAt) || right.runId.localeCompare(left.runId),
       );
 
     const page = matched.slice(offset, offset + limit);

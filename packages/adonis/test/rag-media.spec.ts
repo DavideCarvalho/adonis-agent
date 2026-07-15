@@ -100,7 +100,11 @@ describe('mediaRagIngestion.ingestMedia', () => {
     const ref: MediaRef = { id: 'm', disk: 'd', key: 'a.txt', contentType: 'text/plain' };
 
     await ingestion.ingestMedia(ref);
-    media.put('d', 'a.txt', 'a completely different, much longer second version of the document body');
+    media.put(
+      'd',
+      'a.txt',
+      'a completely different, much longer second version of the document body',
+    );
     await ingestion.ingestMedia(ref);
 
     const docs = await store.listDocuments();
@@ -112,7 +116,10 @@ describe('mediaRagIngestion.ingestMedia', () => {
 describe('content-type filtering', () => {
   it('skips a content type absent from the allow-list', async () => {
     const media = new FakeMediaManager().put('d', 'f.txt', 'hello');
-    const { ingestion, store } = inMemoryMediaRagIngestion({ media, contentTypes: ['text/markdown'] });
+    const { ingestion, store } = inMemoryMediaRagIngestion({
+      media,
+      contentTypes: ['text/markdown'],
+    });
 
     const result = await ingestion.ingestMedia({
       id: 'm',
@@ -206,7 +213,10 @@ describe('tenant/owner metadata is filterable at retrieval', () => {
 
 describe('pluggable extractor hook (application/pdf)', () => {
   it('invokes an injected fake pdf extractor for application/pdf', async () => {
-    const extractor = defaultTextExtractor().register('application/pdf', fakePdfExtractor('parsed pdf body'));
+    const extractor = defaultTextExtractor().register(
+      'application/pdf',
+      fakePdfExtractor('parsed pdf body'),
+    );
     const media = new FakeMediaManager().put('d', 'f.pdf', 'RAWPDF');
     const { ingestion, store } = inMemoryMediaRagIngestion({
       media,

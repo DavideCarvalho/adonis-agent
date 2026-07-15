@@ -2,6 +2,11 @@ import { InMemoryStateStore, WorkflowEngine } from '@adonis-agora/durable';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
+  DurableAgentRunner,
+  registerAgentWorkflow,
+  setDurableAgentContext,
+} from '../src/durable/index.js';
+import {
   AgentDepsFactory,
   AgentRegistry,
   AgentService,
@@ -10,11 +15,6 @@ import {
   ToolRegistry,
 } from '../src/index.js';
 import type { Actor, FakeScript, MessageAttachment, ModelMessage } from '../src/index.js';
-import {
-  DurableAgentRunner,
-  registerAgentWorkflow,
-  setDurableAgentContext,
-} from '../src/durable/index.js';
 import {
   FakeModelProvider,
   InMemoryAgentStore,
@@ -102,9 +102,17 @@ describe('attachment staging (in-memory)', () => {
       name: 'note.txt',
     });
     // The url is a model-fetchable data URL carrying the base64 bytes.
-    expect(attachment.url).toBe(`data:text/plain;base64,${Buffer.from('hello world').toString('base64')}`);
+    expect(attachment.url).toBe(
+      `data:text/plain;base64,${Buffer.from('hello world').toString('base64')}`,
+    );
     expect(staging.staged).toEqual([
-      { mediaId: 'media-1', filename: 'note.txt', contentType: 'text/plain', sizeBytes: 11, actorId: 'u1' },
+      {
+        mediaId: 'media-1',
+        filename: 'note.txt',
+        contentType: 'text/plain',
+        sizeBytes: 11,
+        actorId: 'u1',
+      },
     ]);
   });
 });
@@ -145,9 +153,7 @@ describe('multimodal messages (inline)', () => {
     const userMsg = seen.find((m) => m.role === 'user');
     expect(userMsg?.attachments).toEqual([image, doc]);
     // They persist on the stored user message, so a re-load / replay sends the same parts.
-    const thread = await g.store.getThread(
-      (await g.store.listThreads('u1'))[0]?.id ?? '',
-    );
+    const thread = await g.store.getThread((await g.store.listThreads('u1'))[0]?.id ?? '');
     const storedUser = thread?.messages.find((m) => m.role === 'user');
     expect(storedUser?.attachments).toEqual([image, doc]);
   });

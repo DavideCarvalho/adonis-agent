@@ -153,7 +153,8 @@ export default class AgentProvider {
     // gracefully to the in-process runner when the durable peer isn't installed/configured.
     const runner =
       config.durable === true
-        ? ((await this.#resolveDurableRunner(factory, store)) ?? new InlineAgentRunner(factory, store))
+        ? ((await this.#resolveDurableRunner(factory, store)) ??
+          new InlineAgentRunner(factory, store))
         : new InlineAgentRunner(factory, store);
     const service = new AgentService(runner, store, factory);
     this.app.container.bindValue(AgentService, service);
@@ -280,9 +281,7 @@ export default class AgentProvider {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(
-        '[@adonis-agora/agent] `durable: true` was requested but the durable runner could not be ' +
-          `wired (${message}) — is \`@adonis-agora/durable\` installed and configured? ` +
-          'Falling back to the in-process (inline) runner.',
+        `[@adonis-agora/agent] \`durable: true\` was requested but the durable runner could not be wired (${message}) — is \`@adonis-agora/durable\` installed and configured? Falling back to the in-process (inline) runner.`,
       );
       return null;
     }

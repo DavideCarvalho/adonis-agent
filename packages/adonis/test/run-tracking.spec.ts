@@ -3,6 +3,11 @@ import type { Database } from '@adonisjs/lucid/database';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
+  DurableAgentRunner,
+  registerAgentWorkflow,
+  setDurableAgentContext,
+} from '../src/durable/index.js';
+import {
   AgentDepsFactory,
   AgentRegistry,
   AgentService,
@@ -14,11 +19,6 @@ import {
   ToolRegistry,
 } from '../src/index.js';
 import type { Actor, FakeScript } from '../src/index.js';
-import {
-  DurableAgentRunner,
-  registerAgentWorkflow,
-  setDurableAgentContext,
-} from '../src/durable/index.js';
 import {
   FakeModelProvider,
   InMemoryAgentStore,
@@ -94,7 +94,7 @@ describe('run tracking — inline runner (Lucid)', () => {
     expect(run?.durationMs).not.toBeNull();
   });
 
-  it('stamps run_id on the run\'s messages, tool calls and usage', async () => {
+  it("stamps run_id on the run's messages, tool calls and usage", async () => {
     const script: FakeScript = (_args, turnIndex) =>
       turnIndex === 0
         ? { text: 'looking', toolCall: { name: 'lookup', input: { q: 'x' } } }
@@ -199,7 +199,9 @@ describe('run tracking — durable runner (replay-safe)', () => {
     build(() => ({ text: 'done' }));
     const { runId } = await service.chat({ actor, message: 'hi' });
     await collect(runId);
-    await waitFor(() => store.governanceRuns().some((r) => r.runId === runId && r.status === 'completed'));
+    await waitFor(() =>
+      store.governanceRuns().some((r) => r.runId === runId && r.status === 'completed'),
+    );
 
     const runs = store.governanceRuns().filter((r) => r.runId === runId);
     expect(runs).toHaveLength(1);
@@ -235,7 +237,9 @@ describe('run tracking — durable runner (replay-safe)', () => {
 
     // Approve → the workflow REPLAYS from the checkpoint (recordRunStart re-executes on replay).
     await service.approve(runId, 'call-0-danger');
-    await waitFor(() => store.governanceRuns().some((r) => r.runId === runId && r.status === 'completed'));
+    await waitFor(() =>
+      store.governanceRuns().some((r) => r.runId === runId && r.status === 'completed'),
+    );
 
     // The memoized `persist:run:start` step means replay did NOT insert a second run.
     const runs = store.governanceRuns().filter((r) => r.runId === runId);

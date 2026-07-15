@@ -25,7 +25,12 @@ async function seed(store: AgentStore): Promise<void> {
   const threadB = await store.createThread({ actor: bob, persona: 'default', title: 'B' });
 
   // run-1 — completed
-  await store.recordRunStart({ runId: 'run-1', threadId: threadA.id, actor: alice, agentName: 'default' });
+  await store.recordRunStart({
+    runId: 'run-1',
+    threadId: threadA.id,
+    actor: alice,
+    agentName: 'default',
+  });
   await store.appendMessage({ threadId: threadA.id, role: 'user', content: 'hi', runId: 'run-1' });
   const m1 = await store.appendMessage({
     threadId: threadA.id,
@@ -62,7 +67,12 @@ async function seed(store: AgentStore): Promise<void> {
   });
 
   // run-2 — failed
-  await store.recordRunStart({ runId: 'run-2', threadId: threadA.id, actor: alice, agentName: 'default' });
+  await store.recordRunStart({
+    runId: 'run-2',
+    threadId: threadA.id,
+    actor: alice,
+    agentName: 'default',
+  });
   await store.recordRunEnd({
     runId: 'run-2',
     status: 'failed',
@@ -105,7 +115,12 @@ async function seed(store: AgentStore): Promise<void> {
     status: 'auto_executed',
     runId: 'run-4',
   });
-  await store.updateToolCall({ toolCallId: 'tc-c', status: 'failed', error: 'nope', executionMs: 5 });
+  await store.updateToolCall({
+    toolCallId: 'tc-c',
+    status: 'failed',
+    error: 'nope',
+    executionMs: 5,
+  });
   await store.recordToolCall({
     toolCallId: 'tc-d',
     messageId: m4.id,
@@ -144,7 +159,9 @@ function runContract(name: string, make: () => Promise<AgentGovernanceQueries>):
         'run-2',
         'run-1',
       ]);
-      expect((await gov.listRuns({ status: 'failed' })).runs.map((r) => r.runId)).toEqual(['run-2']);
+      expect((await gov.listRuns({ status: 'failed' })).runs.map((r) => r.runId)).toEqual([
+        'run-2',
+      ]);
       expect((await gov.listRuns({ status: 'running' })).runs.map((r) => r.runId)).toEqual([
         'run-3',
       ]);

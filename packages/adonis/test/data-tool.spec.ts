@@ -1,11 +1,11 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
-  dataTool,
   GroupTableAccessPolicy,
-  loadSqlParser,
-  TenantScopeRewriter,
   type QueryRunner,
   type SqlParserLike,
+  TenantScopeRewriter,
+  dataTool,
+  loadSqlParser,
 } from '../src/index.js';
 import type { AiToolCtx } from '../src/spi/tool.js';
 
@@ -72,9 +72,9 @@ describe('dataTool', () => {
     const runner = new FakeRunner([]);
     const tool = dataTool({ runner, tableAccess });
 
-    await expect(
-      tool.handler.execute({ sql: 'SELECT id FROM user' }, ctx()),
-    ).rejects.toThrow(/not allowed to query/);
+    await expect(tool.handler.execute({ sql: 'SELECT id FROM user' }, ctx())).rejects.toThrow(
+      /not allowed to query/,
+    );
     expect(runner.lastSql).toBeUndefined();
   });
 

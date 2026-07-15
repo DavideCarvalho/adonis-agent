@@ -148,7 +148,9 @@ export const quotas = {
 export type PricingContext = StoreContext;
 
 /** A configured pricing store: a lazy thunk the agent provider calls at boot. */
-export type PricingFactory = (ctx: PricingContext) => AgentPricingStore | Promise<AgentPricingStore>;
+export type PricingFactory = (
+  ctx: PricingContext,
+) => AgentPricingStore | Promise<AgentPricingStore>;
 
 /** Options for the Lucid-backed pricing store. */
 export interface LucidPricingConfig {
@@ -527,8 +529,7 @@ async function buildAdonisRedisClient(connection?: string): Promise<RedisStreamC
   const specifier = '@adonisjs/redis/services/main' as string;
   const mod = (await import(specifier)) as { default: RedisManagerLike };
   const redis = mod.default;
-  const conn =
-    connection !== undefined ? redis.connection(connection) : redis.connection();
+  const conn = connection !== undefined ? redis.connection(connection) : redis.connection();
   return adaptIoRedis(conn.ioConnection);
 }
 

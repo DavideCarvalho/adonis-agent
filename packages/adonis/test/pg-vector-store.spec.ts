@@ -142,7 +142,9 @@ describe('PgVectorStore.search — similarity SQL + bindings', () => {
 describe('PgVectorStore — identifier validation', () => {
   it('rejects a table name that is not a bare identifier', () => {
     const db = new RecordingDb();
-    expect(() => new PgVectorStore(db, { table: 'chunks; DROP TABLE users' })).toThrow(/Invalid table/);
+    expect(() => new PgVectorStore(db, { table: 'chunks; DROP TABLE users' })).toThrow(
+      /Invalid table/,
+    );
     expect(() => new PgVectorStore(db, { table: 'evil"col' })).toThrow(/Invalid table/);
   });
 
@@ -157,7 +159,13 @@ describe('PgVectorStore — identifier validation', () => {
     const db = new RecordingDb();
     const store = new PgVectorStore(db, {
       table: 'my_chunks',
-      columns: { embedding: 'vec', metadata: 'meta', id: 'chunk_id', text: 'body', source: 'origin' },
+      columns: {
+        embedding: 'vec',
+        metadata: 'meta',
+        id: 'chunk_id',
+        text: 'body',
+        source: 'origin',
+      },
     });
 
     await store.search(EMBEDDING, { topK: 2 });
@@ -182,7 +190,9 @@ describe('PgVectorStore.upsert / remove / listDocuments', () => {
     ]);
 
     const { sql, bindings } = db.last;
-    expect(flat(sql)).toContain('INSERT INTO agent_rag_chunks (id, text, source, metadata, embedding)');
+    expect(flat(sql)).toContain(
+      'INSERT INTO agent_rag_chunks (id, text, source, metadata, embedding)',
+    );
     expect(flat(sql)).toContain('VALUES (?, ?, ?, ?::jsonb, ?::vector)');
     expect(flat(sql)).toContain('ON CONFLICT (id) DO UPDATE SET');
     expect(bindings).toEqual(['doc#0', 'chunk text', 'src', '{"a":1}', VECTOR_LITERAL]);
@@ -204,7 +214,9 @@ describe('PgVectorStore.upsert / remove / listDocuments', () => {
     await store.remove('doc');
 
     const { sql, bindings } = db.last;
-    expect(flat(sql)).toContain("DELETE FROM agent_rag_chunks WHERE regexp_replace(id, '#[0-9]+$', '') = ?");
+    expect(flat(sql)).toContain(
+      "DELETE FROM agent_rag_chunks WHERE regexp_replace(id, '#[0-9]+$', '') = ?",
+    );
     expect(bindings).toEqual(['doc']);
   });
 
@@ -262,7 +274,9 @@ describe('ingestion chunk → embed → insert over PgVectorStore', () => {
 
 describe('PgVectorRetriever', () => {
   it('embeds the query then vector-searches with the default topK of 5', async () => {
-    const db = new RecordingDb([{ id: 'a#0', text: 'hit', source: null, metadata: null, score: 0.9 }]);
+    const db = new RecordingDb([
+      { id: 'a#0', text: 'hit', source: null, metadata: null, score: 0.9 },
+    ]);
     const store = new PgVectorStore(db, { dimension: 8 });
     const embedder = new FakeEmbeddingProvider(8);
     const retriever = new PgVectorRetriever(embedder, store);

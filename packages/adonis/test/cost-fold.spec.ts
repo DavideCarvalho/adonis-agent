@@ -24,7 +24,10 @@ interface Overrides {
 async function run(script: FakeScript, overrides: Overrides = {}) {
   const store = new InMemoryAgentStore();
   const sink = new InMemoryTokenStreamSink();
-  const thread = await store.createThread({ actor: { id: 'u1', roles: ['ADMIN'] }, persona: 'default' });
+  const thread = await store.createThread({
+    actor: { id: 'u1', roles: ['ADMIN'] },
+    persona: 'default',
+  });
   const runId = 'run-1';
   const deps: AgentLoopDeps = {
     model: overrides.model ?? new FakeModelProvider(script),
@@ -60,7 +63,11 @@ describe('agent-loop cost fold', () => {
 
   it('estimates costUsd from the bound pricing store for a priced model', async () => {
     const pricingStore = new InMemoryPricingStore();
-    await pricingStore.upsertModelPrice({ modelId: 'fake-1', inputPricePer1m: 3, outputPricePer1m: 15 });
+    await pricingStore.upsertModelPrice({
+      modelId: 'fake-1',
+      inputPricePer1m: 3,
+      outputPricePer1m: 15,
+    });
     const { assistant } = await run(() => ({ text: 'hello' }), { pricingStore });
     expect(typeof assistant?.usage?.costUsd).toBe('number');
     expect(assistant?.usage?.costUsd).toBeGreaterThan(0);
@@ -79,7 +86,11 @@ describe('agent-loop cost fold', () => {
 
   it('lets a provider-reported costUsd win over the pricing-store estimate', async () => {
     const pricingStore = new InMemoryPricingStore();
-    await pricingStore.upsertModelPrice({ modelId: 'fake-1', inputPricePer1m: 3, outputPricePer1m: 15 });
+    await pricingStore.upsertModelPrice({
+      modelId: 'fake-1',
+      inputPricePer1m: 3,
+      outputPricePer1m: 15,
+    });
     const gatewayModel: ModelProvider = {
       async runTurn(args) {
         await args.sink.write(new TextEncoder().encode('done'));
@@ -122,7 +133,9 @@ describe('agent-loop cost fold', () => {
     const sink = new InMemoryTokenStreamSink();
     const thread = await store.createThread({ actor: { id: 'u1' }, persona: 'default' });
     const script: FakeScript = (_args, turnIndex) =>
-      turnIndex === 0 ? { text: 'calling', toolCall: { name: 'noop', input: {} } } : { text: 'final' };
+      turnIndex === 0
+        ? { text: 'calling', toolCall: { name: 'noop', input: {} } }
+        : { text: 'final' };
     await runAgentLoop(
       {
         model: new FakeModelProvider(script),

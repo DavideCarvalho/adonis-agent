@@ -25,11 +25,7 @@ export interface AuthzServiceLike {
    * Does `user` hold `permission` (with wildcard matching, e.g. `posts.*` ⊇ `posts.edit`),
    * scoped to `options.scope`? Mirrors `AuthzService.can`.
    */
-  can(
-    user: unknown,
-    permission: string,
-    options?: { scope?: AuthzTenantScope },
-  ): Promise<boolean>;
+  can(user: unknown, permission: string, options?: { scope?: AuthzTenantScope }): Promise<boolean>;
 }
 
 /** Options for {@link AuthzToolAuthorizer} / {@link authzToolAuthorizer}. */
@@ -86,10 +82,7 @@ export class AuthzToolAuthorizer implements RolesPolicy {
     try {
       // Pass the actor's tenant as the authz scope so the grant is tenant-isolated. Omit the option
       // entirely when there is no tenantRef (global scope) — honors `exactOptionalPropertyTypes`.
-      const options =
-        actor.tenantRef !== undefined
-          ? { scope: { tenantId: actor.tenantRef } }
-          : {};
+      const options = actor.tenantRef !== undefined ? { scope: { tenantId: actor.tenantRef } } : {};
       return await this.#authz.can(this.#userFromActor(actor), tool.ability, options);
     } catch {
       // Fail-closed: any failure resolving the decision denies.

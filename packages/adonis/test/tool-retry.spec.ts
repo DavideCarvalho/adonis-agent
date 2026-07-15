@@ -153,7 +153,10 @@ async function runLoop(
   store = new InMemoryAgentStore(),
 ): Promise<{ text: string; store: InMemoryAgentStore }> {
   const sink = new InMemoryTokenStreamSink();
-  const thread = await store.createThread({ actor: { id: 'u1', roles: ['ADMIN'] }, persona: 'default' });
+  const thread = await store.createThread({
+    actor: { id: 'u1', roles: ['ADMIN'] },
+    persona: 'default',
+  });
   const runId = 'run-1';
   const deps: AgentLoopDeps = {
     model: new FakeModelProvider(twoTurnScript),

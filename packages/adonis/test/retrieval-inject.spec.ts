@@ -2,6 +2,11 @@ import { InMemoryStateStore, WorkflowEngine } from '@adonis-agora/durable';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
+  DurableAgentRunner,
+  registerAgentWorkflow,
+  setDurableAgentContext,
+} from '../src/durable/index.js';
+import {
   AgentDepsFactory,
   AgentRegistry,
   AgentService,
@@ -10,11 +15,6 @@ import {
   ToolRegistry,
 } from '../src/index.js';
 import type { Actor, FakeScript, Passage, Retriever } from '../src/index.js';
-import {
-  DurableAgentRunner,
-  registerAgentWorkflow,
-  setDurableAgentContext,
-} from '../src/durable/index.js';
 import {
   FakeModelProvider,
   InMemoryAgentStore,
@@ -79,10 +79,7 @@ function buildDurable(script: FakeScript, extra: FactoryExtra) {
   return { service, store, sink, registry, engine };
 }
 
-async function collectStream(
-  service: AgentService,
-  runId: string,
-): Promise<string> {
+async function collectStream(service: AgentService, runId: string): Promise<string> {
   const decoder = new TextDecoder();
   let text = '';
   for await (const chunk of service.subscribe(runId)) {

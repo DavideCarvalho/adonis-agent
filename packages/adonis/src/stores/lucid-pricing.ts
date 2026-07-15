@@ -3,8 +3,8 @@ import type {
   CurrentModelPrice,
   ModelPriceInput,
 } from '../spi/pricing-store.js';
-import type { LucidDatabaseLike } from './lucid.js';
 import { AGENT_TABLES } from './lucid-schema.js';
+import type { LucidDatabaseLike } from './lucid.js';
 
 function toNum(value: unknown): number {
   if (typeof value === 'number') return value;
@@ -49,10 +49,7 @@ export class LucidPricingStore implements AgentPricingStore {
   }
 
   async listCurrentPrices(): Promise<CurrentModelPrice[]> {
-    const rows = await this.db
-      .from(AGENT_TABLES.modelPricing)
-      .where('is_current', 1)
-      .select('*');
+    const rows = await this.db.from(AGENT_TABLES.modelPricing).where('is_current', 1).select('*');
     return rows.map((row) => {
       const cacheWrite = row.cache_write_price_per_1m;
       const cacheRead = row.cache_read_price_per_1m;

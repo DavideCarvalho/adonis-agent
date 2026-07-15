@@ -2,6 +2,11 @@ import { InMemoryStateStore, WorkflowEngine } from '@adonis-agora/durable';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
+  DurableAgentRunner,
+  registerAgentWorkflow,
+  setDurableAgentContext,
+} from '../src/durable/index.js';
+import {
   AgentDepsFactory,
   AgentRegistry,
   AgentService,
@@ -11,11 +16,10 @@ import {
 } from '../src/index.js';
 import type { Actor, FakeScript } from '../src/index.js';
 import {
-  DurableAgentRunner,
-  registerAgentWorkflow,
-  setDurableAgentContext,
-} from '../src/durable/index.js';
-import { FakeModelProvider, InMemoryAgentStore, InMemoryTokenStreamSink } from '../src/testing/index.js';
+  FakeModelProvider,
+  InMemoryAgentStore,
+  InMemoryTokenStreamSink,
+} from '../src/testing/index.js';
 
 const actor: Actor = { id: 'u1', roles: ['ADMIN'] };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -37,7 +41,10 @@ interface Graph {
   engine: WorkflowEngine;
 }
 
-function buildGraph(script: FakeScript, agentDefs: Parameters<AgentRegistry['register']>[0][] = []): Graph {
+function buildGraph(
+  script: FakeScript,
+  agentDefs: Parameters<AgentRegistry['register']>[0][] = [],
+): Graph {
   const store = new InMemoryAgentStore();
   const sink = new InMemoryTokenStreamSink();
   const registry = new ToolRegistry();
@@ -122,7 +129,9 @@ describe('DurableAgentRunner + AgentService (durable workflow)', () => {
 
     // The run suspends on the pending action: the durable run is `suspended`, the tool call pending.
     await waitFor(() =>
-      g.store.toolCallRows().some((r) => r.status === 'pending_approval' && r.toolName === 'danger'),
+      g.store
+        .toolCallRows()
+        .some((r) => r.status === 'pending_approval' && r.toolName === 'danger'),
     );
     await waitFor(async () => (await g.engine.getRun(runId))?.status === 'suspended');
 
@@ -161,9 +170,7 @@ describe('DurableAgentRunner + AgentService (durable workflow)', () => {
 
     const { runId } = await g.service.chat({ actor, message: 'do it' });
     const toolCallId = 'call-0-danger';
-    await waitFor(() =>
-      g.store.toolCallRows().some((r) => r.status === 'pending_approval'),
-    );
+    await waitFor(() => g.store.toolCallRows().some((r) => r.status === 'pending_approval'));
     await g.service.reject(runId, toolCallId, 'nope');
     await waitFor(() =>
       g.store.toolCallRows().some((r) => r.toolName === 'danger' && r.status === 'rejected'),

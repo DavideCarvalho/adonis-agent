@@ -65,7 +65,7 @@ describe('LedgerQuotaStore (Lucid ledger)', () => {
     await db.manager.closeAll();
   });
 
-  it('reads today\'s tokens from the append-only token-usage table (cache tokens never re-added)', async () => {
+  it("reads today's tokens from the append-only token-usage table (cache tokens never re-added)", async () => {
     const day = utcDay();
     const thread = await store.createThread({ actor, persona: 'default' });
     const quota = new LedgerQuotaStore(store, 150);

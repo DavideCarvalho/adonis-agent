@@ -27,12 +27,13 @@ export function loadSqlParser(): Promise<SqlParserLike> {
     cached = import('node-sql-parser').then((mod) => {
       // `node-sql-parser` is CJS: under Node ESM the named `Parser` export isn't surfaced, so reach it
       // through the interop default. Fall back to a real named export for bundlers that do surface it.
-      const ParserCtor = (
-        mod as unknown as {
-          Parser?: new () => SqlParserLike;
-          default?: { Parser: new () => SqlParserLike };
-        }
-      ).default?.Parser ?? (mod as unknown as { Parser: new () => SqlParserLike }).Parser;
+      const ParserCtor =
+        (
+          mod as unknown as {
+            Parser?: new () => SqlParserLike;
+            default?: { Parser: new () => SqlParserLike };
+          }
+        ).default?.Parser ?? (mod as unknown as { Parser: new () => SqlParserLike }).Parser;
       return new ParserCtor() as unknown as SqlParserLike;
     });
   }

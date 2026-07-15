@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { loadSqlParser, SqlValidationError, SqlValidator } from '../src/index.js';
+import { SqlValidationError, SqlValidator, loadSqlParser } from '../src/index.js';
 import type { SqlParserLike } from '../src/index.js';
 
 let validator: SqlValidator;
@@ -49,9 +49,7 @@ describe('SqlValidator (data satellite)', () => {
 
   it('rejects a CTE-wrapped DML (INSERT via WITH)', () => {
     expect(() =>
-      validator.validate(
-        "WITH x AS (SELECT 1 AS id) INSERT INTO vehicle (id) SELECT id FROM x",
-      ),
+      validator.validate('WITH x AS (SELECT 1 AS id) INSERT INTO vehicle (id) SELECT id FROM x'),
     ).toThrow(SqlValidationError);
   });
 });

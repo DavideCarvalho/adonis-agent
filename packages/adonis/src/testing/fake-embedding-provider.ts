@@ -1,9 +1,9 @@
-import type { EmbeddingProvider } from '../spi/embedding-provider.js';
-import type { RerankOptions, Reranker } from '../spi/reranker.js';
-import type { Passage } from '../spi/retriever.js';
 import { EmbeddingRetriever } from '../rag/embedding-retriever.js';
 import { type IngestDocument, ingestDocuments } from '../rag/ingest.js';
 import { MemoryVectorStore } from '../rag/memory-vector-store.js';
+import type { EmbeddingProvider } from '../spi/embedding-provider.js';
+import type { RerankOptions, Reranker } from '../spi/reranker.js';
+import type { Passage } from '../spi/retriever.js';
 
 /**
  * A deterministic, offline {@link EmbeddingProvider} — no API key, no network. Each text is embedded as
@@ -47,7 +47,11 @@ function hashToken(token: string, dimensions: number): number {
  * `topK`. Stands in for a real cross-encoder rerank endpoint (provider impls deferred this round).
  */
 export class FakeReranker implements Reranker {
-  async rerank(_query: string, passages: Passage[], options: RerankOptions = {}): Promise<Passage[]> {
+  async rerank(
+    _query: string,
+    passages: Passage[],
+    options: RerankOptions = {},
+  ): Promise<Passage[]> {
     return options.topK !== undefined ? passages.slice(0, options.topK) : passages;
   }
 }

@@ -144,9 +144,7 @@ export class AgentDepsFactory {
       defaultPersona: definition?.defaultPersona ?? 'default',
       ...(definition?.modelId !== undefined ? { modelId: definition.modelId } : {}),
       ...(this.config.quota !== undefined ? { quota: this.config.quota } : {}),
-      ...(this.config.pricingStore !== undefined
-        ? { pricingStore: this.config.pricingStore }
-        : {}),
+      ...(this.config.pricingStore !== undefined ? { pricingStore: this.config.pricingStore } : {}),
       ...(this.config.retriever !== undefined ? { retriever: this.config.retriever } : {}),
       ...(this.config.retrievalTopK !== undefined
         ? { retrievalTopK: this.config.retrievalTopK }

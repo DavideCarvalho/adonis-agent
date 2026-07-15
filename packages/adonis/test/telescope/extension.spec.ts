@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { agentDashboard } from '../../src/telescope/dashboard.js';
 import {
   agentActiveRunsProvider,
   agentDelegationsOverTimeProvider,
@@ -12,7 +13,6 @@ import {
   agentToolCallSuccessRateProvider,
   agentToolCallsOverTimeProvider,
 } from '../../src/telescope/data-providers.js';
-import { agentDashboard } from '../../src/telescope/dashboard.js';
 import { agentTelescopeExtension } from '../../src/telescope/extension.js';
 import type { ExtensionContext, TelescopeEntryLike } from '../../src/telescope/telescope-sdk.js';
 
@@ -165,11 +165,7 @@ describe('agent diagnostics events map to telescope entry shapes', () => {
   });
 
   it('runsOverTime buckets started/finished', async () => {
-    const ctx = makeCtx([
-      entry('run.started'),
-      entry('run.finished'),
-      entry('run.finished'),
-    ]);
+    const ctx = makeCtx([entry('run.started'), entry('run.finished'), entry('run.finished')]);
     const res = (await agentRunsOverTimeProvider().resolve({ buckets: 1 }, ctx)) as {
       rows: Array<{ started: number; finished: number }>;
     };
@@ -202,7 +198,12 @@ describe('agent diagnostics events map to telescope entry shapes', () => {
 
   it('recentToolCalls maps a tool-call entry to a row (tool/type/status)', async () => {
     const ctx = makeCtx([
-      entry('tool-call', { runId: 'r-1', toolName: 'search', toolType: 'read', status: 'executed' }),
+      entry('tool-call', {
+        runId: 'r-1',
+        toolName: 'search',
+        toolType: 'read',
+        status: 'executed',
+      }),
     ]);
     const res = (await agentRecentToolCallsProvider().resolve(undefined, ctx)) as {
       rows: Array<{ runId: string; tool: string; type: string; status: string }>;
@@ -217,9 +218,24 @@ describe('agent diagnostics events map to telescope entry shapes', () => {
 
   it('recentApprovals surfaces only action-type tool calls with their decision', async () => {
     const ctx = makeCtx([
-      entry('tool-call', { runId: 'r-1', toolName: 'refund', toolType: 'action', status: 'rejected' }),
-      entry('tool-call', { runId: 'r-2', toolName: 'ship', toolType: 'action', status: 'executed' }),
-      entry('tool-call', { runId: 'r-3', toolName: 'search', toolType: 'read', status: 'executed' }),
+      entry('tool-call', {
+        runId: 'r-1',
+        toolName: 'refund',
+        toolType: 'action',
+        status: 'rejected',
+      }),
+      entry('tool-call', {
+        runId: 'r-2',
+        toolName: 'ship',
+        toolType: 'action',
+        status: 'executed',
+      }),
+      entry('tool-call', {
+        runId: 'r-3',
+        toolName: 'search',
+        toolType: 'read',
+        status: 'executed',
+      }),
     ]);
     const res = (await agentRecentApprovalsProvider().resolve(undefined, ctx)) as {
       rows: Array<{ runId: string; tool: string; status: string }>;
@@ -254,8 +270,12 @@ describe('no-op when unconfigured / no telescope data', () => {
     expect(await agentActiveRunsProvider().resolve(undefined, ctx)).toMatchObject({ value: 0 });
     expect(await agentTokenUsageProvider().resolve(undefined, ctx)).toMatchObject({ value: 0 });
     expect(await agentRecentRunsProvider().resolve(undefined, ctx)).toMatchObject({ rows: [] });
-    expect(await agentRecentToolCallsProvider().resolve(undefined, ctx)).toMatchObject({ rows: [] });
-    expect(await agentRecentApprovalsProvider().resolve(undefined, ctx)).toMatchObject({ rows: [] });
+    expect(await agentRecentToolCallsProvider().resolve(undefined, ctx)).toMatchObject({
+      rows: [],
+    });
+    expect(await agentRecentApprovalsProvider().resolve(undefined, ctx)).toMatchObject({
+      rows: [],
+    });
     expect(await agentRecentDelegationsProvider().resolve(undefined, ctx)).toMatchObject({
       rows: [],
     });

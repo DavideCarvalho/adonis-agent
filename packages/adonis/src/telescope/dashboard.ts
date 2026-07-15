@@ -21,9 +21,7 @@ export interface AgentDashboardOptions {
  */
 export function agentDashboard(opts: AgentDashboardOptions = {}): DashboardSpec {
   const runCol = (label: string): Column =>
-    opts.runHref
-      ? { key: 'runId', label, link: { href: opts.runHref } }
-      : { key: 'runId', label };
+    opts.runHref ? { key: 'runId', label, link: { href: opts.runHref } } : { key: 'runId', label };
   const threadCol: Column = opts.threadHref
     ? { key: 'thread', label: 'Thread', link: { href: opts.threadHref } }
     : { key: 'thread', label: 'Thread' };

@@ -229,10 +229,9 @@ export class PgVectorStore implements VectorStore {
   }
 
   async remove(documentId: string): Promise<void> {
-    await this.db.rawQuery(
-      `DELETE FROM ${this.table} WHERE ${documentIdExpr(this.col.id)} = ?`,
-      [documentId],
-    );
+    await this.db.rawQuery(`DELETE FROM ${this.table} WHERE ${documentIdExpr(this.col.id)} = ?`, [
+      documentId,
+    ]);
   }
 
   async listDocuments(filter?: Record<string, unknown>): Promise<IndexedDocument[]> {
@@ -298,6 +297,7 @@ export class PgVectorStore implements VectorStore {
  * what `retrievers.pgvector({...})` builds. Construct it directly for programmatic use, or let the factory.
  */
 export class PgVectorRetriever extends EmbeddingRetriever {
+  // biome-ignore lint/complexity/noUselessConstructor: not useless — it NARROWS `store` from the base's `VectorStore` to `PgVectorStore`, which is this subclass's whole point. Delete it and `new PgVectorRetriever(embedder, anyInMemoryStore)` starts compiling.
   constructor(embedder: EmbeddingProvider, store: PgVectorStore) {
     super(embedder, store);
   }

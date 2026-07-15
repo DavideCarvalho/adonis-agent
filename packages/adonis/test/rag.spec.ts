@@ -86,9 +86,9 @@ describe('MemoryVectorStore + EmbeddingRetriever (cosine top-K)', () => {
     const passages = await retriever.retrieve('how do refunds work', { topK: 2 });
     expect(passages).toHaveLength(2);
     // The refund-bearing passages should outrank shipping.
-    expect(passages.map((p) => p.id).some((id) => id.startsWith('billing') || id.startsWith('returns'))).toBe(
-      true,
-    );
+    expect(
+      passages.map((p) => p.id).some((id) => id.startsWith('billing') || id.startsWith('returns')),
+    ).toBe(true);
     expect(passages[0]!.score).toBeGreaterThanOrEqual(passages[1]!.score);
   });
 

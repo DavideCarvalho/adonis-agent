@@ -41,8 +41,18 @@ describe('LucidAgentStore', () => {
   it('round-trips user-message attachments (image/PDF) through the JSON column', async () => {
     const thread = await store.createThread({ actor, persona: 'default' });
     const attachments = [
-      { mediaId: 'm1', url: 'https://example.test/pic.png', contentType: 'image/png', name: 'pic.png' },
-      { mediaId: 'm2', url: 'https://example.test/r.pdf', contentType: 'application/pdf', name: 'r.pdf' },
+      {
+        mediaId: 'm1',
+        url: 'https://example.test/pic.png',
+        contentType: 'image/png',
+        name: 'pic.png',
+      },
+      {
+        mediaId: 'm2',
+        url: 'https://example.test/r.pdf',
+        contentType: 'application/pdf',
+        name: 'r.pdf',
+      },
     ];
     const stored = await store.appendMessage({
       threadId: thread.id,

@@ -68,7 +68,8 @@ function parseJsonCol(text: unknown): unknown {
 
 /** Default page size + hard cap, mirroring the governance routes' clamp. */
 function clampLimit(limit: number | undefined, fallback = 50): number {
-  const value = limit !== undefined && Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : fallback;
+  const value =
+    limit !== undefined && Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : fallback;
   return Math.min(value, 200);
 }
 
@@ -93,8 +94,10 @@ function runRowToSummary(row: Record<string, unknown>): RunSummaryRow {
     runId: String(row.id),
     threadId: String(row.thread_id),
     actorRef: String(row.actor_ref),
-    tenantRef: row.tenant_ref === null || row.tenant_ref === undefined ? null : String(row.tenant_ref),
-    agentName: row.agent_name === null || row.agent_name === undefined ? null : String(row.agent_name),
+    tenantRef:
+      row.tenant_ref === null || row.tenant_ref === undefined ? null : String(row.tenant_ref),
+    agentName:
+      row.agent_name === null || row.agent_name === undefined ? null : String(row.agent_name),
     status: String(row.status),
     startedAt: new Date(startedAt).toISOString(),
     finishedAt: finishedAt === null ? null : new Date(finishedAt).toISOString(),
@@ -435,8 +438,7 @@ export class LucidGovernanceQueries implements AgentGovernanceQueries {
         .from(AGENT_TABLES.messages)
         .where('id', String(call.message_id))
         .first();
-      const threadId =
-        message === null || message === undefined ? '' : String(message.thread_id);
+      const threadId = message === null || message === undefined ? '' : String(message.thread_id);
       const runId =
         call.run_id !== null && call.run_id !== undefined
           ? String(call.run_id)
@@ -522,7 +524,8 @@ export class LucidGovernanceQueries implements AgentGovernanceQueries {
         calls: bucket.calls,
         failed: bucket.failed,
         rejected: bucket.rejected,
-        avgDurationMs: bucket.durationCount === 0 ? null : bucket.durationSum / bucket.durationCount,
+        avgDurationMs:
+          bucket.durationCount === 0 ? null : bucket.durationSum / bucket.durationCount,
       });
     }
     result.sort(

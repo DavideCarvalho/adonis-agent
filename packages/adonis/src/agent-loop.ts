@@ -278,12 +278,18 @@ export async function runAgentLoop(
   if (deps.retriever !== undefined) {
     const retriever = deps.retriever;
     const topK = deps.retrievalTopK ?? 5;
-    const passages = await hooks.step('retrieve', () => retriever.retrieve(input.userText, { topK }));
+    const passages = await hooks.step('retrieve', () =>
+      retriever.retrieve(input.userText, { topK }),
+    );
     if (passages.length > 0) {
       injectedPassages = passages;
       system = `${system}\n\n${buildContextBlock(passages)}`;
     }
-    publishAgentRetrieved({ runId: hooks.runId, queryLength: input.userText.length, count: passages.length });
+    publishAgentRetrieved({
+      runId: hooks.runId,
+      queryLength: input.userText.length,
+      count: passages.length,
+    });
   }
 
   // Fetched ONCE per run (not per step) and reused for every step's cost estimate below. Returned as
