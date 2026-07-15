@@ -39,7 +39,7 @@
   },
   "peerDependencies": {
     "@adonisjs/core": "^7.3.0",
-    "@adonis-agora/agent": "workspace:^"
+    "@adonis-agora/agent": "^0.1.0"
   },
   "peerDependenciesMeta": {
     "@adonisjs/core": {
