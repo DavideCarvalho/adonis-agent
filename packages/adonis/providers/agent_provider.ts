@@ -6,6 +6,7 @@ import {
   type ActorResolver,
   type AgentConfig,
   AgentDepsFactory,
+  type AgentGovernanceAuthorize,
   type AgentGovernanceQueries,
   type AgentPricingStore,
   AgentRegistry,
@@ -27,6 +28,7 @@ import {
   type ToolsBarrel,
   UnconfiguredActorResolver,
   discoverTools,
+  evaluateGovernanceGate,
   governanceQueries as governanceQueriesFactories,
   lucidStoreConnection,
   pricingStores,
@@ -162,7 +164,14 @@ export default class AgentProvider {
     const service = new AgentService(runner, store, factory);
     this.app.container.bindValue(AgentService, service);
 
-    await this.#registerRoutes(config, service, actorResolver, attachmentStaging, governance);
+    await this.#registerRoutes(
+      config,
+      service,
+      actorResolver,
+      attachmentStaging,
+      governance,
+      config.governanceAuthorize,
+    );
   }
 
   async shutdown() {
@@ -335,6 +344,7 @@ export default class AgentProvider {
     actorResolver: ActorResolver,
     attachmentStaging: AttachmentStagingStore | undefined,
     governance: AgentGovernanceQueries | undefined,
+    governanceAuthorize: AgentGovernanceAuthorize | undefined,
   ): Promise<void> {
     const router = await this.app.container.make('router');
     const path = (config.path ?? 'agent').replace(/^\/+|\/+$/g, '');
@@ -357,26 +367,38 @@ export default class AgentProvider {
       await this.#pipe(ctx, service, runId, threadId);
     });
 
-    // 2. GET /agent/chat/:runId/stream — re-attach SSE.
+    // 2. GET /agent/chat/:runId/stream — re-attach SSE. Authenticated: the actor resolver reads the
+    // request's session/cookies (an EventSource can't set headers), 401 on failure — so an anonymous
+    // caller can never re-attach to a run's live token stream.
     router.get(p('chat/:runId/stream'), async (ctx: HttpContext) => {
+      const actor = await this.#resolveActor(ctx, actorResolver);
+      if (actor === null) return;
       await this.#pipe(ctx, service, String(ctx.params.runId));
     });
 
-    // 3. POST /agent/chat/:runId/cancel.
+    // 3. POST /agent/chat/:runId/cancel — authenticated (no anonymous run cancellation).
     router.post(p('chat/:runId/cancel'), async (ctx: HttpContext) => {
+      const actor = await this.#resolveActor(ctx, actorResolver);
+      if (actor === null) return;
       await service.cancel(String(ctx.params.runId));
       return ctx.response.json({ aborted: true });
     });
 
-    // 4. POST /agent/tool-call/approve.
+    // 4. POST /agent/tool-call/approve — authenticated. Delivering a HITL decision is a privileged
+    // control: an anonymous caller must never approve a pending tool call. The actor is resolved (401
+    // on failure) before the decision reaches the runner.
     router.post(p('tool-call/approve'), async (ctx: HttpContext) => {
+      const actor = await this.#resolveActor(ctx, actorResolver);
+      if (actor === null) return;
       const body = (ctx.request.body() ?? {}) as { runId: string; toolCallId: string };
       await service.approve(body.runId, body.toolCallId);
       return ctx.response.json({ ok: true });
     });
 
-    // 5. POST /agent/tool-call/reject.
+    // 5. POST /agent/tool-call/reject — authenticated (mirrors approve).
     router.post(p('tool-call/reject'), async (ctx: HttpContext) => {
+      const actor = await this.#resolveActor(ctx, actorResolver);
+      if (actor === null) return;
       const body = (ctx.request.body() ?? {}) as {
         runId: string;
         toolCallId: string;
@@ -394,23 +416,32 @@ export default class AgentProvider {
     });
 
     // 7. GET /agent/threads/personas/catalog (before :id so it isn't captured by the param).
+    // Authenticated — an anonymous caller reads nothing from the agent surface.
     router.get(p('threads/personas/catalog'), async (ctx: HttpContext) => {
+      const actor = await this.#resolveActor(ctx, actorResolver);
+      if (actor === null) return;
       return ctx.response.json(service.personaCatalog());
     });
 
-    // 8. GET /agent/threads/:id — detail or null.
+    // 8. GET /agent/threads/:id — detail or null. Authenticated.
     router.get(p('threads/:id'), async (ctx: HttpContext) => {
+      const actor = await this.#resolveActor(ctx, actorResolver);
+      if (actor === null) return;
       return ctx.response.json(await service.getThread(String(ctx.params.id)));
     });
 
-    // 9. DELETE /agent/threads/:id.
+    // 9. DELETE /agent/threads/:id. Authenticated.
     router.delete(p('threads/:id'), async (ctx: HttpContext) => {
+      const actor = await this.#resolveActor(ctx, actorResolver);
+      if (actor === null) return;
       await service.deleteThread(String(ctx.params.id));
       return ctx.response.json({ ok: true });
     });
 
-    // 10. POST /agent/threads/:id/fork-from/:messageId.
+    // 10. POST /agent/threads/:id/fork-from/:messageId. Authenticated.
     router.post(p('threads/:id/fork-from/:messageId'), async (ctx: HttpContext) => {
+      const actor = await this.#resolveActor(ctx, actorResolver);
+      if (actor === null) return;
       return ctx.response.json(
         await service.forkThread(String(ctx.params.id), String(ctx.params.messageId)),
       );
@@ -466,9 +497,42 @@ export default class AgentProvider {
       });
     }
 
+    // The cross-actor governance read-model is mounted (often by default, when the main store is
+    // Lucid) but no authorization gate was configured — so every authenticated actor can read the
+    // platform-wide spend/usage/threads/approvals. Nudge the app to gate it (typically ADMIN-only).
+    if (governance !== undefined && governanceAuthorize === undefined) {
+      console.warn(
+        '[@adonis-agora/agent] `/agent/governance/*` is mounted without a `governanceAuthorize` gate — the cross-actor spend/usage/approvals read-model is readable by ANY authenticated actor. Set `governanceAuthorize` in config/agent.ts (e.g. an ADMIN check) to restrict it.',
+      );
+    }
+
+    // ── Per-actor approvals inbox. Mounted with the governance read-model (it reads the same store),
+    // but NOT behind `governanceAuthorize`: it is ALWAYS scoped to the calling actor's OWN pending
+    // approvals (`pendingApprovals({ actor })` filters by the owning run's `actor_ref`). This is the
+    // route a non-admin surface (e.g. a coordinator's chat) polls to discover its own suspended
+    // tool calls, even when the cross-actor governance read-model below is ADMIN-only.
+    if (governance !== undefined) {
+      const gov = governance;
+      const limitFor = (ctx: HttpContext) => {
+        const raw = Number.parseInt(String(ctx.request.input('limit', '50')), 10);
+        const value = Number.isFinite(raw) && raw > 0 ? raw : 50;
+        return Math.min(value, 200);
+      };
+      // GET /agent/approvals/mine — the authenticated actor's own pending HITL approvals, oldest first.
+      router.get(p('approvals/mine'), async (ctx: HttpContext) => {
+        const actor = await this.#resolveActor(ctx, actorResolver);
+        if (actor === null) return;
+        return ctx.response.json(
+          await gov.pendingApprovals({ limit: limitFor(ctx), actor: actor.id }),
+        );
+      });
+    }
+
     // ── OPTIONAL governance read routes. Mounted only when `governanceQueries` is configured, so an
-    // app without it never exposes the cost/usage read-model. All read-only (GET) and authenticated
-    // (actor resolved via the shared resolver — governance is cross-actor data). `from`/`to` are
+    // app without it never exposes the cost/usage read-model. All read-only (GET). Each route resolves
+    // the actor (401 on failure) and then runs the optional `governanceAuthorize` gate (403 on deny)
+    // via `#resolveGovernanceActor` — governance is cross-actor data, so an app can restrict it (e.g.
+    // ADMIN-only) without also locking the per-actor `approvals/mine` route above. `from`/`to` are
     // inclusive UTC days (`YYYY-MM-DD`), defaulting to today; `limit` defaults to 50, clamped to 200
     // (mirroring the dashboard's own clamp).
     if (governance !== undefined) {
@@ -488,41 +552,41 @@ export default class AgentProvider {
 
       // GET /agent/governance/spend/model — per-model token + cost rollup over the range.
       router.get(g('spend/model'), async (ctx: HttpContext) => {
-        const actor = await this.#resolveActor(ctx, actorResolver);
+        const actor = await this.#resolveGovernanceActor(ctx, actorResolver, governanceAuthorize);
         if (actor === null) return;
         return ctx.response.json(await gov.spendByModel(range(ctx)));
       });
 
       // GET /agent/governance/spend/actor — per-actor token + cost rollup over the range.
       router.get(g('spend/actor'), async (ctx: HttpContext) => {
-        const actor = await this.#resolveActor(ctx, actorResolver);
+        const actor = await this.#resolveGovernanceActor(ctx, actorResolver, governanceAuthorize);
         if (actor === null) return;
         return ctx.response.json(await gov.spendByActor(range(ctx)));
       });
 
       // GET /agent/governance/usage/trend — the daily token + cost trend over the range.
       router.get(g('usage/trend'), async (ctx: HttpContext) => {
-        const actor = await this.#resolveActor(ctx, actorResolver);
+        const actor = await this.#resolveGovernanceActor(ctx, actorResolver, governanceAuthorize);
         if (actor === null) return;
         return ctx.response.json(await gov.usageTrend(range(ctx)));
       });
 
       // GET /agent/governance/tool-calls/recent — newest-first recent tool-call activity feed.
       router.get(g('tool-calls/recent'), async (ctx: HttpContext) => {
-        const actor = await this.#resolveActor(ctx, actorResolver);
+        const actor = await this.#resolveGovernanceActor(ctx, actorResolver, governanceAuthorize);
         if (actor === null) return;
         return ctx.response.json(await gov.recentToolCalls(limitOf(ctx)));
       });
 
       // GET /agent/governance/threads/recent — newest-first recent thread activity feed.
       router.get(g('threads/recent'), async (ctx: HttpContext) => {
-        const actor = await this.#resolveActor(ctx, actorResolver);
+        const actor = await this.#resolveGovernanceActor(ctx, actorResolver, governanceAuthorize);
         if (actor === null) return;
         return ctx.response.json(await gov.recentThreads(limitOf(ctx)));
       });
 
-      // ── Run lifecycle governance (the run tracking read-model). Same read-only + authenticated
-      // envelope; the runs are cross-actor governance data.
+      // ── Run lifecycle governance (the run tracking read-model). Same read-only + authenticated +
+      // authorized envelope; the runs are cross-actor governance data.
       const optionalRange = (ctx: HttpContext) => {
         const from = ctx.request.input('from');
         const to = ctx.request.input('to');
@@ -535,7 +599,7 @@ export default class AgentProvider {
       // GET /agent/governance/runs — filterable, cursor-paginated run list, newest-first.
       // Query: actor?, agent?, status?, from?, to?, cursor?, limit?
       router.get(g('runs'), async (ctx: HttpContext) => {
-        const actor = await this.#resolveActor(ctx, actorResolver);
+        const actor = await this.#resolveGovernanceActor(ctx, actorResolver, governanceAuthorize);
         if (actor === null) return;
         const filterActor = ctx.request.input('actor');
         const agent = ctx.request.input('agent');
@@ -558,14 +622,16 @@ export default class AgentProvider {
       // GET /agent/governance/runs/:id — one run's full trace (run + messages + tool calls +
       // approvals + usage), or null.
       router.get(g('runs/:id'), async (ctx: HttpContext) => {
-        const actor = await this.#resolveActor(ctx, actorResolver);
+        const actor = await this.#resolveGovernanceActor(ctx, actorResolver, governanceAuthorize);
         if (actor === null) return;
         return ctx.response.json(await gov.runDetail(String(ctx.params.id)));
       });
 
-      // GET /agent/governance/approvals/pending — cross-thread HITL approvals inbox, oldest first.
+      // GET /agent/governance/approvals/pending — cross-actor HITL approvals inbox, oldest first. This
+      // is the platform-wide inbox (every actor's pending calls); it is governance-gated. A caller that
+      // only needs its OWN pending approvals uses `GET /agent/approvals/mine` instead.
       router.get(g('approvals/pending'), async (ctx: HttpContext) => {
-        const actor = await this.#resolveActor(ctx, actorResolver);
+        const actor = await this.#resolveGovernanceActor(ctx, actorResolver, governanceAuthorize);
         if (actor === null) return;
         const filterActor = ctx.request.input('actor');
         return ctx.response.json(
@@ -578,30 +644,61 @@ export default class AgentProvider {
 
       // GET /agent/governance/tools/stats — per-tool call/failure/rejection/latency rollup.
       router.get(g('tools/stats'), async (ctx: HttpContext) => {
-        const actor = await this.#resolveActor(ctx, actorResolver);
+        const actor = await this.#resolveGovernanceActor(ctx, actorResolver, governanceAuthorize);
         if (actor === null) return;
         return ctx.response.json(await gov.perToolStats(optionalRange(ctx)));
       });
 
       // GET /agent/governance/reliability — success/failure/cancel rates + mean settled duration.
       router.get(g('reliability'), async (ctx: HttpContext) => {
-        const actor = await this.#resolveActor(ctx, actorResolver);
+        const actor = await this.#resolveGovernanceActor(ctx, actorResolver, governanceAuthorize);
         if (actor === null) return;
         return ctx.response.json(await gov.runReliability(optionalRange(ctx)));
       });
     }
   }
 
-  /** Resolve the actor; on failure reply 401 and return `null` so the handler short-circuits. */
+  /**
+   * Resolve the actor; on failure reply 401 and return `null` so the handler short-circuits. A
+   * resolver is contracted to THROW when it can't establish an identity, but a misbehaving custom
+   * resolver that returns a nullish value instead is also treated as unauthorized (401) rather than
+   * letting `undefined`/`null` reach the service as a fabricated actor.
+   */
   async #resolveActor(ctx: HttpContext, actorResolver: ActorResolver) {
     try {
-      return await actorResolver.resolve(ctx);
+      const actor = await actorResolver.resolve(ctx);
+      if (actor === null || actor === undefined) {
+        ctx.response.status(401).json({ error: 'unauthorized' });
+        return null;
+      }
+      return actor;
     } catch (error) {
       ctx.response
         .status(401)
         .json({ error: error instanceof Error ? error.message : 'unauthorized' });
       return null;
     }
+  }
+
+  /**
+   * Resolve the actor for a cross-actor governance route, then apply the optional `governanceAuthorize`
+   * gate. Replies `401` (unresolved actor) or `403` (gate denied/threw) and returns `null` so the
+   * handler short-circuits; otherwise returns the resolved actor. The gate decision itself lives in the
+   * router-free {@link evaluateGovernanceGate} so it can be unit tested.
+   */
+  async #resolveGovernanceActor(
+    ctx: HttpContext,
+    actorResolver: ActorResolver,
+    governanceAuthorize: AgentGovernanceAuthorize | undefined,
+  ) {
+    const actor = await this.#resolveActor(ctx, actorResolver);
+    if (actor === null) return null;
+    const verdict = await evaluateGovernanceGate(actor, ctx, governanceAuthorize);
+    if (!verdict.ok) {
+      ctx.response.status(verdict.status).json({ error: verdict.error });
+      return null;
+    }
+    return actor;
   }
 
   /**
