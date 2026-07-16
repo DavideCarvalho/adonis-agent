@@ -1,5 +1,22 @@
 # @adonis-agora/agent-dashboard
 
+## 0.3.0
+
+### Minor Changes
+
+- [#10](https://github.com/DavideCarvalho/adonis-agent/pull/10) [`c2ddde3`](https://github.com/DavideCarvalho/adonis-agent/commit/c2ddde3d4fdb5f87f3c49984c5cbbe145fbd1038) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Add an optional `authorize` gate to the dashboard config
+
+  The console serves the governance read-model, which spans EVERY actor's spend and
+  usage — so authenticating the caller (the default gate, shared with
+  `/agent/governance/*`) is often not enough; you want to restrict it to admins.
+
+  `config('agent').dashboard.authorize` is an optional `(actor, ctx) => boolean |
+Promise<boolean>` run after the actor resolves. Return `false` (or throw) to deny
+  — the request gets `403`. Omit it to keep the previous behavior (any resolved
+  actor allowed). Typical use: `authorize: (actor) => actor.roles?.includes('ADMIN')
+?? false`. The gate decision lives in a router-free `evaluateDashboardGate` helper
+  so it is unit tested directly.
+
 ## 0.2.2
 
 ### Patch Changes
