@@ -86,10 +86,20 @@ function instantiate(cls: ToolClass): ToolHandler | null {
 }
 
 /**
- * Pick the module extension for the running environment so a built app (`.js`) and a dev/ts app
- * (`.ts`, run under a loader) never double-register the same tool — matching the durable scanner.
+ * Pick the module extension to import from what the scanned directory ACTUALLY holds: `.ts` when it
+ * has any non-declaration `.ts` file, else `.js`. At runtime an app runs from EITHER its source
+ * (`app/agent_tools/*.ts`, dev under a TS loader) OR its build (`build/app/agent_tools/*.js`, TS
+ * compiled away) — never both in the same directory — so choosing one gate still guarantees a built
+ * `.js` and a dev `.ts` of the same module never double-register.
+ *
+ * This must be derived from the app's own files, NOT from `extname(import.meta.url)`: this module
+ * ships COMPILED (always `.js`), so keying off its own extension would make a `.ts` dev app scan for
+ * `.js` tools it doesn't have and register nothing.
  */
-const MODULE_EXT = extname(import.meta.url || '') === '.ts' ? '.ts' : '.js';
+function moduleExtensionFor(entries: string[]): '.ts' | '.js' {
+  const hasTsSource = entries.some((entry) => extname(entry) === '.ts' && !entry.endsWith('.d.ts'));
+  return hasTsSource ? '.ts' : '.js';
+}
 
 /**
  * Scan `dir` RECURSIVELY for modules and register every exported `@AiTool` class / `defineTool`
@@ -112,10 +122,11 @@ export async function discoverTools(
     }
     throw err;
   }
+  const moduleExt = moduleExtensionFor(entries);
   const registered: RegisteredTool[] = [];
   const seen = new Set<unknown>();
   for (const entry of entries.sort()) {
-    if (extname(entry) !== MODULE_EXT || entry.endsWith(`.d${MODULE_EXT}`)) {
+    if (extname(entry) !== moduleExt || entry.endsWith(`.d${moduleExt}`)) {
       continue;
     }
     const mod = (await import(pathToFileURL(join(dir, entry)).href)) as Record<string, unknown>;
