@@ -2,6 +2,7 @@ import { pathToFileURL } from 'node:url';
 import type { HttpContext } from '@adonisjs/core/http';
 import type { ApplicationService } from '@adonisjs/core/types';
 import {
+  type Actor,
   type ActorDirectory,
   type ActorResolver,
   type AgentConfig,
@@ -29,6 +30,7 @@ import {
   UnconfiguredActorResolver,
   discoverTools,
   evaluateGovernanceGate,
+  evaluateOwnership,
   governanceQueries as governanceQueriesFactories,
   lucidStoreConnection,
   pricingStores,
@@ -68,9 +70,16 @@ const DEFAULT_ALLOWED_ATTACHMENT_CONTENT_TYPES: readonly string[] = [
  * - `boot()` discovers tools (the generated `hooks/tools` barrel first, then an `app/agent_tools`
  *   readdir fallback), registers config-level functional tools and synthesizes `agent`-kind delegate
  *   tools for `delegatesTo` edges, builds the runtime graph (store/sink/quota/authorizer/actor-resolver
- *   → deps factory → the inline runner → the `AgentService` facade), and mounts the eleven `/agent`
- *   routes under `config.path` — plus an optional twelfth `POST /agent/attachments` upload route when
- *   `attachmentStaging` is configured.
+ *   → deps factory → the inline runner → the `AgentService` facade), and mounts the `/agent` routes
+ *   under `config.path` — plus optional routes (`POST /agent/attachments` when `attachmentStaging` is
+ *   configured; the `/agent/governance/*` read-model and `/agent/approvals/mine` when `governanceQueries`
+ *   is configured).
+ *
+ * Every route resolves the acting actor (401 if it can't). Run/thread routes (stream re-attach,
+ * cancel, tool-call approve/reject, `threads/:id` read/delete/fork) are additionally owner-scoped:
+ * a caller may act only on runs/threads it owns, unless it is governance-privileged (`governanceAuthorize`).
+ * The cross-actor `/agent/governance/*` read-model is gated by `governanceAuthorize`; `approvals/mine`
+ * is always scoped to the caller's own pending approvals.
  *
  * The selected store (`lucid`/`memory`) is built lazily from the config so its peer (`@adonisjs/lucid`)
  * loads only when chosen. Agent lifecycle events are emitted structurally by core onto the
@@ -350,11 +359,19 @@ export default class AgentProvider {
     const path = (config.path ?? 'agent').replace(/^\/+|\/+$/g, '');
     const p = (suffix: string) => `${path}/${suffix}`;
 
-    // 1. POST /agent/chat — resolve actor, start the run, SSE-pipe the token stream.
+    // 1. POST /agent/chat — resolve actor, start the run, SSE-pipe the token stream. When the caller
+    // continues an EXISTING thread (`body.threadId`), it must own it: otherwise an authenticated caller
+    // could pass another actor's threadId to load that thread's full history into the model (read it
+    // back over SSE) and append its own turn into the victim's thread. A new-thread chat (no threadId)
+    // has no owner to check. Owner-scoped exactly like the `threads/:id` routes.
     router.post(p('chat'), async (ctx: HttpContext) => {
       const actor = await this.#resolveActor(ctx, actorResolver);
       if (actor === null) return;
       const body = (ctx.request.body() ?? {}) as ChatBody;
+      if (body.threadId !== undefined) {
+        const owner = await service.threadOwner(body.threadId);
+        if (!(await this.#assertOwner(ctx, actor, owner, 'thread', governanceAuthorize))) return;
+      }
       const { runId, threadId } = await service.chat({
         actor,
         message: body.message,
@@ -373,29 +390,38 @@ export default class AgentProvider {
     router.get(p('chat/:runId/stream'), async (ctx: HttpContext) => {
       const actor = await this.#resolveActor(ctx, actorResolver);
       if (actor === null) return;
-      await this.#pipe(ctx, service, String(ctx.params.runId));
+      const runId = String(ctx.params.runId);
+      const owner = await service.runOwner(runId);
+      if (!(await this.#assertOwner(ctx, actor, owner, 'run', governanceAuthorize))) return;
+      await this.#pipe(ctx, service, runId);
     });
 
-    // 3. POST /agent/chat/:runId/cancel — authenticated (no anonymous run cancellation).
+    // 3. POST /agent/chat/:runId/cancel — authenticated + owner-scoped (a caller cancels only its own
+    // runs, unless governance-privileged).
     router.post(p('chat/:runId/cancel'), async (ctx: HttpContext) => {
       const actor = await this.#resolveActor(ctx, actorResolver);
       if (actor === null) return;
-      await service.cancel(String(ctx.params.runId));
+      const runId = String(ctx.params.runId);
+      const owner = await service.runOwner(runId);
+      if (!(await this.#assertOwner(ctx, actor, owner, 'run', governanceAuthorize))) return;
+      await service.cancel(runId);
       return ctx.response.json({ aborted: true });
     });
 
-    // 4. POST /agent/tool-call/approve — authenticated. Delivering a HITL decision is a privileged
-    // control: an anonymous caller must never approve a pending tool call. The actor is resolved (401
-    // on failure) before the decision reaches the runner.
+    // 4. POST /agent/tool-call/approve — authenticated + owner-scoped. Delivering a HITL decision is a
+    // privileged control: only the actor that OWNS the run (or a governance-privileged actor) may
+    // approve its pending tool call — an authenticated non-owner who learns a runId/toolCallId cannot.
     router.post(p('tool-call/approve'), async (ctx: HttpContext) => {
       const actor = await this.#resolveActor(ctx, actorResolver);
       if (actor === null) return;
       const body = (ctx.request.body() ?? {}) as { runId: string; toolCallId: string };
+      const owner = await service.runOwner(body.runId);
+      if (!(await this.#assertOwner(ctx, actor, owner, 'run', governanceAuthorize))) return;
       await service.approve(body.runId, body.toolCallId);
       return ctx.response.json({ ok: true });
     });
 
-    // 5. POST /agent/tool-call/reject — authenticated (mirrors approve).
+    // 5. POST /agent/tool-call/reject — authenticated + owner-scoped (mirrors approve).
     router.post(p('tool-call/reject'), async (ctx: HttpContext) => {
       const actor = await this.#resolveActor(ctx, actorResolver);
       if (actor === null) return;
@@ -404,6 +430,8 @@ export default class AgentProvider {
         toolCallId: string;
         reason?: string;
       };
+      const owner = await service.runOwner(body.runId);
+      if (!(await this.#assertOwner(ctx, actor, owner, 'run', governanceAuthorize))) return;
       await service.reject(body.runId, body.toolCallId, body.reason);
       return ctx.response.json({ ok: true });
     });
@@ -423,28 +451,36 @@ export default class AgentProvider {
       return ctx.response.json(service.personaCatalog());
     });
 
-    // 8. GET /agent/threads/:id — detail or null. Authenticated.
+    // 8. GET /agent/threads/:id — detail or null. Authenticated + owner-scoped (a caller reads only its
+    // own threads, unless governance-privileged).
     router.get(p('threads/:id'), async (ctx: HttpContext) => {
       const actor = await this.#resolveActor(ctx, actorResolver);
       if (actor === null) return;
-      return ctx.response.json(await service.getThread(String(ctx.params.id)));
+      const threadId = String(ctx.params.id);
+      const owner = await service.threadOwner(threadId);
+      if (!(await this.#assertOwner(ctx, actor, owner, 'thread', governanceAuthorize))) return;
+      return ctx.response.json(await service.getThread(threadId));
     });
 
-    // 9. DELETE /agent/threads/:id. Authenticated.
+    // 9. DELETE /agent/threads/:id. Authenticated + owner-scoped.
     router.delete(p('threads/:id'), async (ctx: HttpContext) => {
       const actor = await this.#resolveActor(ctx, actorResolver);
       if (actor === null) return;
-      await service.deleteThread(String(ctx.params.id));
+      const threadId = String(ctx.params.id);
+      const owner = await service.threadOwner(threadId);
+      if (!(await this.#assertOwner(ctx, actor, owner, 'thread', governanceAuthorize))) return;
+      await service.deleteThread(threadId);
       return ctx.response.json({ ok: true });
     });
 
-    // 10. POST /agent/threads/:id/fork-from/:messageId. Authenticated.
+    // 10. POST /agent/threads/:id/fork-from/:messageId. Authenticated + owner-scoped.
     router.post(p('threads/:id/fork-from/:messageId'), async (ctx: HttpContext) => {
       const actor = await this.#resolveActor(ctx, actorResolver);
       if (actor === null) return;
-      return ctx.response.json(
-        await service.forkThread(String(ctx.params.id), String(ctx.params.messageId)),
-      );
+      const threadId = String(ctx.params.id);
+      const owner = await service.threadOwner(threadId);
+      if (!(await this.#assertOwner(ctx, actor, owner, 'thread', governanceAuthorize))) return;
+      return ctx.response.json(await service.forkThread(threadId, String(ctx.params.messageId)));
     });
 
     // 11. GET /agent/quota/today.
@@ -699,6 +735,35 @@ export default class AgentProvider {
       return null;
     }
     return actor;
+  }
+
+  /**
+   * Object-level authorization: assert the already-resolved `actor` may act on a per-actor resource
+   * (a run or thread) whose owning ref is `ownerRef`. A caller may act on a resource it OWNS; a
+   * cross-actor caller is allowed only when it is governance-privileged (passes `governanceAuthorize`,
+   * the app's "may act across actors" seam — so with no gate configured, ownership is strict). Replies
+   * `404` (unknown resource — never confirms an id the caller doesn't own) or `403` (not owner, not
+   * privileged) and returns `false`; returns `true` to proceed. Decision core is the router-free
+   * {@link evaluateOwnership}.
+   */
+  async #assertOwner(
+    ctx: HttpContext,
+    actor: Actor,
+    ownerRef: string | null,
+    kind: 'run' | 'thread',
+    governanceAuthorize: AgentGovernanceAuthorize | undefined,
+  ): Promise<boolean> {
+    let privileged = false;
+    if (governanceAuthorize !== undefined) {
+      privileged = (await evaluateGovernanceGate(actor, ctx, governanceAuthorize)).ok;
+    }
+    const verdict = evaluateOwnership(actor.id, ownerRef, privileged);
+    if (!verdict.ok) {
+      const error = verdict.status === 404 ? `${kind} not found` : 'forbidden';
+      ctx.response.status(verdict.status).json({ error });
+      return false;
+    }
+    return true;
   }
 
   /**

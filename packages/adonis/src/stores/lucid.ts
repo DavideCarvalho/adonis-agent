@@ -178,6 +178,17 @@ export class LucidAgentStore implements AgentStore {
     };
   }
 
+  async getThreadActorRef(threadId: string): Promise<string | null> {
+    await this.init();
+    const row = await this.db
+      .from(AGENT_TABLES.threads)
+      .where('id', threadId)
+      .whereNull('deleted_at')
+      .first();
+    if (row === null || row === undefined) return null;
+    return String(row.actor_ref);
+  }
+
   async listThreads(actorRef: string, limit = 50): Promise<ThreadSummary[]> {
     await this.init();
     const rows = await this.db
@@ -399,6 +410,13 @@ export class LucidAgentStore implements AgentStore {
       error: null,
       durable: input.durable ? 1 : 0,
     });
+  }
+
+  async getRunActorRef(runId: string): Promise<string | null> {
+    await this.init();
+    const row = await this.db.from(AGENT_TABLES.runs).where('id', runId).first();
+    if (row === null || row === undefined) return null;
+    return String(row.actor_ref);
   }
 
   async recordRunEnd(input: RecordRunEndInput): Promise<void> {
