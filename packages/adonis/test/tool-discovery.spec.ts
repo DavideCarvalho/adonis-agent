@@ -40,6 +40,21 @@ const purgeCache = defineTool(
   async ({ key }: { key: string }) => ({ purged: key }),
 );
 
+// Decorator-free authoring form: `static tool` config, mirroring durable's `static workflow`.
+class GetTimeTool implements ToolHandler<Record<string, never>> {
+  static tool = {
+    name: 'getTime',
+    kind: 'read',
+    description: 'Get the current time',
+    input: z.object({}),
+    ability: 'clock.read',
+  } as const;
+
+  async execute(_input: Record<string, never>, _ctx: AiToolCtx) {
+    return { iso: '2020-01-01T00:00:00Z' };
+  }
+}
+
 describe('tool discovery', () => {
   it('reads @AiTool metadata off a decorated class', () => {
     const meta = readAiToolMeta(GetWeatherTool);
@@ -53,6 +68,21 @@ describe('tool discovery', () => {
     expect(result).toEqual({ name: 'getWeather', source: 'class' });
     expect(registry.has('getWeather')).toBe(true);
     expect(registry.spec('getWeather')?.roles).toEqual(['ADMIN']);
+  });
+
+  it('reads metadata off a decorator-free `static tool` class', () => {
+    const meta = readAiToolMeta(GetTimeTool);
+    expect(meta?.name).toBe('getTime');
+    expect(meta?.kind).toBe('read');
+    expect(meta?.ability).toBe('clock.read');
+  });
+
+  it('registers a `static tool` class into the ToolRegistry (no decorator)', () => {
+    const registry = new ToolRegistry();
+    const result = registerToolExport(registry, GetTimeTool, ['ADMIN']);
+    expect(result).toEqual({ name: 'getTime', source: 'class' });
+    expect(registry.has('getTime')).toBe(true);
+    expect(registry.spec('getTime')?.ability).toBe('clock.read');
   });
 
   it('registers a defineTool functional tool', () => {
