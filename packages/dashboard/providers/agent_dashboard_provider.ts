@@ -3,7 +3,12 @@ import type { ActorResolver, AgentConfig } from '@adonis-agora/agent';
 import type { HttpContext } from '@adonisjs/core/http';
 import router from '@adonisjs/core/services/router';
 import type { ApplicationService } from '@adonisjs/core/types';
-import { type AgentDashboardConfig, resolveDashboardConfig } from '../src/server/define_config.js';
+import {
+  type AgentDashboardAuthorize,
+  type AgentDashboardConfig,
+  resolveDashboardConfig,
+} from '../src/server/define_config.js';
+import { evaluateDashboardGate } from '../src/server/gate.js';
 import {
   apiBaseFor,
   contentTypeFor,
@@ -49,16 +54,18 @@ export default class AgentDashboardProvider {
     // the mount directory rather than its parent.
     router.get(mount, (ctx) => ctx.response.redirect().toPath(`${mount}/`));
 
+    const authorize = dashboardConfig.authorize;
+
     // The SPA shell.
     router.get(`${mount}/`, async (ctx) => {
-      if (!(await this.gate(ctx, actorResolver))) return;
+      if (!(await this.gate(ctx, actorResolver, authorize))) return;
       await this.sendIndex(ctx, apiBase);
     });
 
     // Built assets (JS/CSS/fonts/...), with an index fallback for any unmatched path so the
     // client-rendered console still boots on a deep link.
     router.get(`${mount}/*`, async (ctx) => {
-      if (!(await this.gate(ctx, actorResolver))) return;
+      if (!(await this.gate(ctx, actorResolver, authorize))) return;
       const segments = safeAssetSegments(ctx.params['*']);
       if (segments === null) {
         return ctx.response.status(400).json({ error: 'bad asset path' });
@@ -68,23 +75,22 @@ export default class AgentDashboardProvider {
   }
 
   /**
-   * Resolve the actor through the agent config's resolver, mirroring the governance routes. Returns
-   * `true` to proceed; on a missing/failed resolver replies `401` and returns `false`.
+   * Resolve the actor through the agent config's resolver, mirroring the governance routes, then run
+   * the optional `authorize` gate. Returns `true` to proceed; replies `401` on a missing/failed
+   * resolver and `403` when `authorize` denies the resolved actor. The decision itself lives in the
+   * router-free {@link evaluateDashboardGate} so it can be unit tested; this only writes the response.
    */
-  private async gate(ctx: HttpContext, actorResolver: ActorResolver | undefined): Promise<boolean> {
-    if (actorResolver === undefined) {
-      ctx.response.status(401).json({ error: 'no actor resolver configured' });
+  private async gate(
+    ctx: HttpContext,
+    actorResolver: ActorResolver | undefined,
+    authorize?: AgentDashboardAuthorize,
+  ): Promise<boolean> {
+    const verdict = await evaluateDashboardGate(ctx, actorResolver, authorize);
+    if (!verdict.ok) {
+      ctx.response.status(verdict.status).json({ error: verdict.error });
       return false;
     }
-    try {
-      await actorResolver.resolve(ctx);
-      return true;
-    } catch (error) {
-      ctx.response
-        .status(401)
-        .json({ error: error instanceof Error ? error.message : 'unauthorized' });
-      return false;
-    }
+    return true;
   }
 
   /** Read `dist/spa/index.html`, inject the API base, and send it. */
