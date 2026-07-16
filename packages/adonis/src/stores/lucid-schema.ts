@@ -140,3 +140,31 @@ export async function createAgentTables(db: LucidDatabaseLike): Promise<void> {
     await db.rawQuery(stmt);
   }
 }
+
+/**
+ * Provisioning promise memoized per db client, so the three Lucid-backed stores (the agent store,
+ * the pricing store, the governance read-model) that share these tables run {@link createAgentTables}
+ * exactly once against a given connection instead of racing six `CREATE TABLE IF NOT EXISTS` each.
+ * Correctness never depends on the memo — the DDL is idempotent — it only avoids redundant round
+ * trips. A failed provisioning is evicted so the next call retries rather than caching the rejection.
+ */
+const provisioned = new WeakMap<object, Promise<void>>();
+
+/**
+ * Idempotently ensure the six agent tables exist, memoized per db client. This is what the stores
+ * call on first use when `autoCreateTables` is on (the default) — whichever store touches the
+ * connection first provisions the shared schema, so pricing seeds and governance reads work even
+ * before the first agent run.
+ */
+export function ensureAgentTables(db: LucidDatabaseLike): Promise<void> {
+  const key = db as unknown as object;
+  let ready = provisioned.get(key);
+  if (ready === undefined) {
+    ready = createAgentTables(db).catch((error) => {
+      provisioned.delete(key);
+      throw error;
+    });
+    provisioned.set(key, ready);
+  }
+  return ready;
+}
