@@ -18,7 +18,7 @@ import type {
   ToolCallRequest,
   ToolResult,
 } from '../types.js';
-import { AGENT_TABLES, createAgentTables } from './lucid-schema.js';
+import { AGENT_TABLES, ensureAgentTables } from './lucid-schema.js';
 
 // ── Structural Lucid typing (copied from telescope) ──────────────────────────
 // The store touches only this slice of an AdonisJS Lucid `Database`, typed structurally so
@@ -57,8 +57,11 @@ export interface LucidDatabaseLike extends LucidClientLike {
 
 export interface LucidAgentStoreOptions {
   /**
-   * Run {@link createAgentTables} on first use so the tables exist without a migration. Convenient
-   * for tests/scripts; production should run the published migration. Default `false`.
+   * Provision the agent tables on first use (via {@link ensureAgentTables}), so the lib manages its
+   * own schema — the ecosystem convention (mirrors `@adonis-agora/durable` and `@adonis-agora/authz`).
+   * Default `true`. Set `false` to opt out and run the published migration (`createAgentTables` /
+   * `node ace configure @adonis-agora/agent`) instead — e.g. when you want the schema versioned.
+   * The same flag governs the pricing store and the governance read-model, which share these tables.
    */
   autoCreateTables?: boolean;
 }
@@ -113,12 +116,12 @@ export class LucidAgentStore implements AgentStore {
     private readonly db: LucidDatabaseLike,
     options: LucidAgentStoreOptions = {},
   ) {
-    this.autoCreateTables = options.autoCreateTables ?? false;
+    this.autoCreateTables = options.autoCreateTables ?? true;
   }
 
   private init(): Promise<void> {
     if (this.ready === null) {
-      this.ready = this.autoCreateTables ? createAgentTables(this.db) : Promise.resolve();
+      this.ready = this.autoCreateTables ? ensureAgentTables(this.db) : Promise.resolve();
     }
     return this.ready;
   }

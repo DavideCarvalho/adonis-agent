@@ -3,8 +3,18 @@ import type {
   CurrentModelPrice,
   ModelPriceInput,
 } from '../spi/pricing-store.js';
-import { AGENT_TABLES } from './lucid-schema.js';
+import { AGENT_TABLES, ensureAgentTables } from './lucid-schema.js';
 import type { LucidDatabaseLike } from './lucid.js';
+
+/** Options for {@link LucidPricingStore}. */
+export interface LucidPricingStoreOptions {
+  /**
+   * Provision the shared agent tables on first use. Default `true` (the ecosystem convention). The
+   * pricing store writes to `agent_model_pricing`, one of the six shared tables; auto-provisioning
+   * here is what lets a pricing seed run before the first agent run. Set `false` to run the migration.
+   */
+  autoCreateTables?: boolean;
+}
 
 function toNum(value: unknown): number {
   if (typeof value === 'number') return value;
@@ -25,9 +35,22 @@ function toNum(value: unknown): number {
  * as an ISO string. Booleans are `INTEGER` 0/1 for cross-dialect portability.
  */
 export class LucidPricingStore implements AgentPricingStore {
-  constructor(private readonly db: LucidDatabaseLike) {}
+  private readonly autoCreateTables: boolean;
+
+  constructor(
+    private readonly db: LucidDatabaseLike,
+    options: LucidPricingStoreOptions = {},
+  ) {
+    this.autoCreateTables = options.autoCreateTables ?? true;
+  }
+
+  /** Provision the shared schema on first use (no-op when disabled), memoized across the stores. */
+  private ready(): Promise<void> {
+    return this.autoCreateTables ? ensureAgentTables(this.db) : Promise.resolve();
+  }
 
   async upsertModelPrice(input: ModelPriceInput): Promise<void> {
+    await this.ready();
     // Atomic supersede in a transaction: retire the model's current row, then insert the new one.
     await this.db.transaction(async (trx) => {
       await trx
@@ -49,6 +72,7 @@ export class LucidPricingStore implements AgentPricingStore {
   }
 
   async listCurrentPrices(): Promise<CurrentModelPrice[]> {
+    await this.ready();
     const rows = await this.db.from(AGENT_TABLES.modelPricing).where('is_current', 1).select('*');
     return rows.map((row) => {
       const cacheWrite = row.cache_write_price_per_1m;

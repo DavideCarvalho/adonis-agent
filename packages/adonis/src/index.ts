@@ -140,7 +140,12 @@ export type {
   LucidQueryBuilderLike,
   LucidInsertBuilderLike,
 } from './stores/lucid.js';
-export { createTableStatements, createAgentTables, AGENT_TABLES } from './stores/lucid-schema.js';
+export {
+  createTableStatements,
+  createAgentTables,
+  ensureAgentTables,
+  AGENT_TABLES,
+} from './stores/lucid-schema.js';
 export { LedgerQuotaStore } from './stores/ledger-quota.js';
 export { LucidPricingStore } from './stores/lucid-pricing.js';
 export { LucidGovernanceQueries } from './stores/lucid-governance-queries.js';

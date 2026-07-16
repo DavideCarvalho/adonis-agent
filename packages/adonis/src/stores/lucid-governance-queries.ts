@@ -21,7 +21,7 @@ import type {
 } from '../spi/governance-queries.js';
 import type { AgentPricingStore, CurrentModelPrice } from '../spi/pricing-store.js';
 import { estimateCost } from '../spi/pricing-store.js';
-import { AGENT_TABLES } from './lucid-schema.js';
+import { AGENT_TABLES, ensureAgentTables } from './lucid-schema.js';
 import type { LucidDatabaseLike } from './lucid.js';
 
 function toInt(value: unknown): number {
@@ -82,6 +82,16 @@ function optionalDayBounds(range: ToolStatsRange | undefined): {
     start: range?.from !== undefined ? Date.parse(`${range.from}T00:00:00.000Z`) : undefined,
     end: range?.to !== undefined ? Date.parse(`${range.to}T23:59:59.999Z`) : undefined,
   };
+}
+
+/** Options for {@link LucidGovernanceQueries}. */
+export interface LucidGovernanceQueriesOptions {
+  /**
+   * Provision the shared agent tables on first use. Default `true` (the ecosystem convention). The
+   * read-model aggregates the six shared tables; auto-provisioning here is what lets the governance
+   * routes / dashboard answer on a fresh deploy before the first agent run. Set `false` for the migration.
+   */
+  autoCreateTables?: boolean;
 }
 
 /** Map a raw `agent_run` Lucid row to the read-model {@link RunSummaryRow}. */
@@ -155,10 +165,20 @@ function rowToUsage(row: Record<string, unknown>): UsageRow {
  * — the behavioral twin of {@link import('../testing/in-memory-governance-queries.js').InMemoryGovernanceQueries}.
  */
 export class LucidGovernanceQueries implements AgentGovernanceQueries {
+  private readonly autoCreateTables: boolean;
+
   constructor(
     private readonly db: LucidDatabaseLike,
     private readonly pricingStore?: AgentPricingStore,
-  ) {}
+    options: LucidGovernanceQueriesOptions = {},
+  ) {
+    this.autoCreateTables = options.autoCreateTables ?? true;
+  }
+
+  /** Provision the shared schema on first use (no-op when disabled), memoized across the stores. */
+  private ready(): Promise<void> {
+    return this.autoCreateTables ? ensureAgentTables(this.db) : Promise.resolve();
+  }
 
   private async loadPricing(): Promise<Map<string, CurrentModelPrice>> {
     const pricing = new Map<string, CurrentModelPrice>();
@@ -198,6 +218,7 @@ export class LucidGovernanceQueries implements AgentGovernanceQueries {
   }
 
   async spendByModel(range: GovernanceRange): Promise<ModelSpendRow[]> {
+    await this.ready();
     const pricing = await this.loadPricing();
     const byModel = new Map<
       string,
@@ -227,6 +248,7 @@ export class LucidGovernanceQueries implements AgentGovernanceQueries {
   }
 
   async spendByActor(range: GovernanceRange): Promise<ActorSpendRow[]> {
+    await this.ready();
     const pricing = await this.loadPricing();
     const byActor = new Map<string, { requests: number; totalTokens: number; costUsd: number }>();
     for (const row of await this.usageInRange(range)) {
@@ -247,6 +269,7 @@ export class LucidGovernanceQueries implements AgentGovernanceQueries {
   }
 
   async usageTrend(range: GovernanceRange): Promise<UsageTrendPoint[]> {
+    await this.ready();
     const pricing = await this.loadPricing();
     const byDay = new Map<string, { totalTokens: number; costUsd: number }>();
     for (const row of await this.usageInRange(range)) {
@@ -269,6 +292,7 @@ export class LucidGovernanceQueries implements AgentGovernanceQueries {
    * `limit`, mirroring the reference adapters' N+1 for the recent feeds).
    */
   async recentToolCalls(limit: number): Promise<ToolCallActivityRow[]> {
+    await this.ready();
     const calls = await this.db
       .from(AGENT_TABLES.toolCalls)
       .orderBy('created_at', 'desc')
@@ -297,6 +321,7 @@ export class LucidGovernanceQueries implements AgentGovernanceQueries {
    * with its message count and rolled-up token total, capped at `limit`.
    */
   async recentThreads(limit: number): Promise<ThreadActivityRow[]> {
+    await this.ready();
     const threads = await this.db
       .from(AGENT_TABLES.threads)
       .whereNull('deleted_at')
@@ -339,6 +364,7 @@ export class LucidGovernanceQueries implements AgentGovernanceQueries {
    * empty page.
    */
   async listRuns(filter: ListRunsFilter = {}): Promise<ListRunsResult> {
+    await this.ready();
     const limit = clampLimit(filter.limit);
     const offset = ((): number => {
       const parsed = filter.cursor !== undefined ? Number.parseInt(filter.cursor, 10) : 0;
@@ -376,6 +402,7 @@ export class LucidGovernanceQueries implements AgentGovernanceQueries {
    * the run is unknown.
    */
   async runDetail(runId: string): Promise<RunDetail | null> {
+    await this.ready();
     const runRow = await this.db.from(AGENT_TABLES.runs).where('id', runId).first();
     if (runRow === null || runRow === undefined) return null;
 
@@ -426,6 +453,7 @@ export class LucidGovernanceQueries implements AgentGovernanceQueries {
    * filter is applied after resolution; `limit` caps the returned inbox.
    */
   async pendingApprovals(filter: PendingApprovalsFilter = {}): Promise<PendingApprovalRow[]> {
+    await this.ready();
     const limit = clampLimit(filter.limit);
     const calls = await this.db
       .from(AGENT_TABLES.toolCalls)
@@ -475,6 +503,7 @@ export class LucidGovernanceQueries implements AgentGovernanceQueries {
    * none did.
    */
   async perToolStats(range: ToolStatsRange = {}): Promise<PerToolStatRow[]> {
+    await this.ready();
     const { start, end } = optionalDayBounds(range);
     let query = this.db.from(AGENT_TABLES.toolCalls);
     if (start !== undefined) query = query.where('created_at', '>=', start);
@@ -539,6 +568,7 @@ export class LucidGovernanceQueries implements AgentGovernanceQueries {
    * on `started_at`. A store without recorded runs yields all zeros / `null` duration.
    */
   async runReliability(range: ToolStatsRange = {}): Promise<RunReliability> {
+    await this.ready();
     const { start, end } = optionalDayBounds(range);
     let query = this.db.from(AGENT_TABLES.runs);
     if (start !== undefined) query = query.where('started_at', '>=', start);

@@ -33,8 +33,9 @@ export interface LucidStoreConfig {
   /** Lucid connection name to use. Defaults to the `Database` default connection. */
   connection?: string;
   /**
-   * Create the five agent tables on first use (no migration). Handy for tests/scripts; production
-   * should run the published migration. Default `false`.
+   * Provision the agent tables on first use — the lib manages its own schema (the ecosystem
+   * convention, mirroring durable/authz). Default `true`. Set `false` to run the published migration
+   * instead. Governs the pricing store and governance read-model too, which share these tables.
    */
   autoCreateTables?: boolean;
 }
@@ -156,6 +157,11 @@ export type PricingFactory = (
 export interface LucidPricingConfig {
   /** Lucid connection name to use. Defaults to the `Database` default connection. */
   connection?: string;
+  /**
+   * Provision the shared agent tables on first use. Default `true` (the ecosystem convention) — this
+   * is what lets a pricing seed run before the first agent run. Set `false` to run the migration.
+   */
+  autoCreateTables?: boolean;
 }
 
 /**
@@ -186,7 +192,11 @@ export const pricingStores = {
       const client = (config.connection !== undefined
         ? db.connection(config.connection)
         : db) as unknown as LucidDatabaseLike;
-      return new LucidPricingStore(client);
+      return new LucidPricingStore(client, {
+        ...(config.autoCreateTables !== undefined
+          ? { autoCreateTables: config.autoCreateTables }
+          : {}),
+      });
     };
   },
 };
@@ -218,6 +228,12 @@ export type GovernanceQueriesFactory = (
 export interface LucidGovernanceConfig {
   /** Lucid connection name to use. Defaults to the `Database` default connection. */
   connection?: string;
+  /**
+   * Provision the shared agent tables on first use. Default `true` (the ecosystem convention) — lets
+   * the governance routes / dashboard answer on a fresh deploy before the first agent run. Set
+   * `false` to run the migration.
+   */
+  autoCreateTables?: boolean;
 }
 
 /**
@@ -242,7 +258,11 @@ export const governanceQueries = {
       const client = (config.connection !== undefined
         ? db.connection(config.connection)
         : db) as unknown as LucidDatabaseLike;
-      return new LucidGovernanceQueries(client, pricingStore);
+      return new LucidGovernanceQueries(client, pricingStore, {
+        ...(config.autoCreateTables !== undefined
+          ? { autoCreateTables: config.autoCreateTables }
+          : {}),
+      });
     };
   },
 };
