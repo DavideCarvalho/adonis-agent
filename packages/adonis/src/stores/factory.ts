@@ -28,6 +28,29 @@ export interface StoreContext {
  */
 export type StoreFactory = (ctx: StoreContext) => Promise<AgentStore>;
 
+/**
+ * Resolve the Lucid `Database` from the IoC container instead of `@adonisjs/lucid/services/db`'s
+ * default export.
+ *
+ * The agent provider builds these store thunks during its own `boot()`, but `services/db` assigns its
+ * default only inside `await app.booted(...)` — which runs after every provider's `boot()`. So at the
+ * moment a thunk runs, that default is still `undefined` and `db.connection(...)` throws a `TypeError`,
+ * failing the whole app boot. The `'lucid.db'` alias is registered in the database provider's
+ * `register()` (which runs before any `boot()`) and is the exact binding `services/db` itself resolves,
+ * so it is available here. Resolved lazily by string alias, so `@adonisjs/lucid` stays an optional peer.
+ */
+/**
+ * The Lucid connection manager the factories resolve: a {@link LucidDatabaseLike} (usable directly as
+ * the default connection) that also exposes `.connection(name)` for a named one.
+ */
+interface LucidConnectionManagerLike extends LucidDatabaseLike {
+  connection(name?: string): LucidDatabaseLike;
+}
+
+async function resolveLucidDatabase(app: ApplicationService): Promise<LucidConnectionManagerLike> {
+  return (await app.container.make('lucid.db')) as unknown as LucidConnectionManagerLike;
+}
+
 /** Options for the Lucid-backed persistent store. */
 export interface LucidStoreConfig {
   /** Lucid connection name to use. Defaults to the `Database` default connection. */
@@ -72,8 +95,8 @@ export const stores = {
 
   /** Persist threads/messages/tool-calls/usage in SQL via `@adonisjs/lucid`. */
   lucid(config: LucidStoreConfig = {}): StoreFactory {
-    return async () => {
-      const db = (await import('@adonisjs/lucid/services/db')).default;
+    return async (ctx) => {
+      const db = await resolveLucidDatabase(ctx.app);
       const { LucidAgentStore } = await import('./lucid.js');
       const client = (config.connection !== undefined
         ? db.connection(config.connection)
@@ -186,8 +209,8 @@ export const pricingStores = {
 
   /** Persist per-model prices in SQL (the `agent_model_pricing` table) via `@adonisjs/lucid`. */
   lucid(config: LucidPricingConfig = {}): PricingFactory {
-    return async () => {
-      const db = (await import('@adonisjs/lucid/services/db')).default;
+    return async (ctx) => {
+      const db = await resolveLucidDatabase(ctx.app);
       const { LucidPricingStore } = await import('./lucid-pricing.js');
       const client = (config.connection !== undefined
         ? db.connection(config.connection)
@@ -252,13 +275,13 @@ export interface LucidGovernanceConfig {
 export const governanceQueries = {
   /** Aggregate the five agent tables in SQL via `@adonisjs/lucid`, priced against the pricing store. */
   lucid(config: LucidGovernanceConfig = {}): GovernanceQueriesFactory {
-    return async ({ pricingStore }) => {
-      const db = (await import('@adonisjs/lucid/services/db')).default;
+    return async (ctx) => {
+      const db = await resolveLucidDatabase(ctx.app);
       const { LucidGovernanceQueries } = await import('./lucid-governance-queries.js');
       const client = (config.connection !== undefined
         ? db.connection(config.connection)
         : db) as unknown as LucidDatabaseLike;
-      return new LucidGovernanceQueries(client, pricingStore, {
+      return new LucidGovernanceQueries(client, ctx.pricingStore, {
         ...(config.autoCreateTables !== undefined
           ? { autoCreateTables: config.autoCreateTables }
           : {}),
@@ -369,7 +392,7 @@ export const retrievers = {
    * optional. Pass `ensureSchema: true` to provision the extension/table/index at boot for tests.
    */
   pgvector(config: PgVectorRetrieverConfig): RetrieverFactory {
-    return async () => {
+    return async (ctx) => {
       const { PgVectorStore, PgVectorRetriever } = await import('../rag/pg-vector-store.js');
       const { ingestDocuments } = await import('../rag/ingest.js');
       const embedder =
@@ -377,7 +400,7 @@ export const retrievers = {
       const db =
         config.db ??
         (await (async () => {
-          const dbService = (await import('@adonisjs/lucid/services/db')).default;
+          const dbService = await resolveLucidDatabase(ctx.app);
           return (config.connection !== undefined
             ? dbService.connection(config.connection)
             : dbService) as unknown as LucidDatabaseLike;
