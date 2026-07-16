@@ -1,5 +1,40 @@
 # @adonis-agora/agent
 
+## 0.7.0
+
+### Minor Changes
+
+- [#19](https://github.com/DavideCarvalho/adonis-agent/pull/19) [`c3d7b14`](https://github.com/DavideCarvalho/adonis-agent/commit/c3d7b140cdf32ef4324e18d84a13860ff0eb1a7c) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Add a decorator-free `static tool` authoring form for class tools
+
+  A tool class can now declare its metadata with a `static tool = { name, kind, description, input, … }`
+  config instead of the `@AiTool({ … })` decorator — the same shape, mirroring
+  `@adonis-agora/durable`'s `static workflow`. Discovery, registration, and execution are identical;
+  `readAiToolMeta` now reads the static config when no decorator is present.
+
+  ```ts
+  import type {
+    AiToolCtx,
+    AiToolOptions,
+    ToolHandler,
+  } from "@adonis-agora/agent";
+  import { z } from "zod";
+
+  export default class GetWeather implements ToolHandler<{ city: string }> {
+    static tool = {
+      name: "getWeather",
+      kind: "read",
+      description: "Get the weather",
+      input: z.object({ city: z.string() }),
+    } satisfies AiToolOptions;
+
+    async execute(input: { city: string }, ctx: AiToolCtx) {
+      return { tempC: 21 };
+    }
+  }
+  ```
+
+  The `@AiTool` decorator and the functional `defineTool(...)` forms are unchanged.
+
 ## 0.6.0
 
 ### Minor Changes
