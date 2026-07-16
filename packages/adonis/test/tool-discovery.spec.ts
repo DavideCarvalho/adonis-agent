@@ -1,3 +1,5 @@
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
@@ -6,12 +8,15 @@ import {
   ToolRegistry,
   defineTool,
   delegateToolName,
+  discoverTools,
   readAiToolMeta,
   registerDelegateTools,
   registerToolExport,
   registerToolsFromBarrel,
 } from '../src/index.js';
 import type { AiToolCtx, ToolHandler } from '../src/index.js';
+
+const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'agent_tools');
 
 @AiTool({
   name: 'getWeather',
@@ -82,6 +87,25 @@ describe('tool discovery', () => {
     expect(spec?.kind).toBe('agent');
     expect(spec?.targetAgent).toBe('researcher');
     expect(spec?.description).toContain('You research things.');
+  });
+
+  it('discovers .ts tools from a source directory (a dev/ts app), skipping .d.ts declarations', async () => {
+    // The scanned directory holds only `.ts` files — an app running from source under a TS loader.
+    // The pre-fix scanner chose its extension from `extname(import.meta.url)` (this module ships as
+    // `.js`), so it looked for `.js` tools here and registered nothing. The fixture also has a
+    // `decl_only.d.ts` that must be skipped.
+    const registry = new ToolRegistry();
+    const registered = await discoverTools(registry, fixturesDir, ['ADMIN']);
+    expect(registered.map((r) => r.name)).toContain('fixtureWeather');
+    expect(registry.has('fixtureWeather')).toBe(true);
+  });
+
+  it('is a no-op for a missing directory (discovery is opt-in)', async () => {
+    const registry = new ToolRegistry();
+    const registered = await discoverTools(registry, join(fixturesDir, 'does_not_exist'), [
+      'ADMIN',
+    ]);
+    expect(registered).toEqual([]);
   });
 
   it('skips a tool whose name is already registered (first wins)', () => {
