@@ -1,4 +1,5 @@
 import type { BrandedFunctionalTool } from './ai-tool-ref.js';
+import type { AgentGovernanceAuthorize } from './governance-gate.js';
 import type { ActorDirectory } from './spi/actor-directory.js';
 import type { ActorResolver } from './spi/actor-resolver.js';
 import type { AttachmentStagingStore } from './spi/attachment-staging.js';
@@ -118,6 +119,21 @@ export interface AgentConfig {
    * Read-only.
    */
   governanceQueries?: AgentGovernanceQueries | GovernanceQueriesFactory | false;
+  /**
+   * Authorization gate for the cross-actor `/agent/governance/*` read routes. It runs after the actor
+   * is resolved (the caller is authenticated) and decides whether THIS actor may read the platform-wide
+   * governance read-model — every actor's spend, usage, threads, and pending HITL approvals. Return
+   * `false` to deny (the route replies `403`). Omit it and any resolved actor may read governance (the
+   * historical behavior, correct only when every authenticated caller is trusted staff); typically set
+   * it to an ADMIN check.
+   *
+   * This does NOT gate the per-actor `GET /agent/approvals/mine` route, which is always scoped to the
+   * calling actor's OWN pending approvals — so a non-admin surface (e.g. a coordinator's chat) can poll
+   * its own approvals even while the cross-actor governance read-model is ADMIN-only. Mirrors
+   * `@adonis-agora/agent-dashboard`'s `authorize` hook so the JSON routes and the console SPA can be
+   * gated with the same predicate.
+   */
+  governanceAuthorize?: AgentGovernanceAuthorize;
   /**
    * Enables always-on ("inject") RAG: before each turn the loop retrieves passages for the user message
    * and folds them into the system prompt (replay-safe under durable). Pass a {@link Retriever} directly

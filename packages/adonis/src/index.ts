@@ -60,6 +60,8 @@ export {
   actorDirectories,
 } from './define_config.js';
 export { lucidStoreConnection } from './stores/factory.js';
+export { evaluateGovernanceGate } from './governance-gate.js';
+export type { AgentGovernanceAuthorize, GovernanceGateVerdict } from './governance-gate.js';
 export type {
   AgentConfig,
   DefaultAgentOptions,
