@@ -2,7 +2,12 @@ import type { Database } from '@adonisjs/lucid/database';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Actor } from '../src/index.js';
 import type { StoreContext } from '../src/stores/factory.js';
-import { governanceQueries, pricingStores, stores } from '../src/stores/factory.js';
+import {
+  governanceQueries,
+  lucidStoreConnection,
+  pricingStores,
+  stores,
+} from '../src/stores/factory.js';
 import { makeMemoryDb } from './helpers/make-db.js';
 
 const actor: Actor = { id: 'user-1', roles: ['ADMIN'] };
@@ -58,5 +63,23 @@ describe('lucid factories resolve the Database from the container (boot-safe)', 
     db = makeMemoryDb();
     const gov = await governanceQueries.lucid()(ctxWithDb(db, { pricingStore: undefined }));
     expect(await gov.spendByModel({ fromDay: '2026-01-01', toDay: '2026-12-31' })).toEqual([]);
+  });
+});
+
+describe('lucidStoreConnection tags the main store connection (pricing/governance mirroring)', () => {
+  it('returns the connection for stores.lucid({ connection })', () => {
+    expect(lucidStoreConnection(stores.lucid({ connection: 'entretextos' }))).toBe('entretextos');
+  });
+
+  it('returns null for stores.lucid() with no connection (the app default connection)', () => {
+    expect(lucidStoreConnection(stores.lucid())).toBe(null);
+  });
+
+  it('returns undefined for a non-lucid store (memory)', () => {
+    expect(lucidStoreConnection(stores.memory())).toBe(undefined);
+  });
+
+  it('returns undefined for an arbitrary custom store factory', () => {
+    expect(lucidStoreConnection(async () => ({}) as never)).toBe(undefined);
   });
 });

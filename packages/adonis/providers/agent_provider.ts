@@ -27,6 +27,9 @@ import {
   type ToolsBarrel,
   UnconfiguredActorResolver,
   discoverTools,
+  governanceQueries as governanceQueriesFactories,
+  lucidStoreConnection,
+  pricingStores,
   registerDelegateTools,
   registerFunctionalTool,
   registerToolsFromBarrel,
@@ -211,27 +214,51 @@ export default class AgentProvider {
     return typeof quota === 'function' ? quota({ app: this.app, store }) : quota;
   }
 
+  /**
+   * The Lucid connection of the main store when it is a `stores.lucid()` store (`null` = the app's
+   * default connection), or `undefined` when the main store isn't Lucid. Used to default the pricing
+   * store and governance read-model to the same connection the agent already persists on.
+   */
+  #mainStoreLucidConnection(config: AgentConfig): string | null | undefined {
+    const name = config.store;
+    const factory = name ? config.stores?.[name] : undefined;
+    return lucidStoreConnection(factory);
+  }
+
+  /**
+   * Build the pricing store. `false` disables it (cost stays `null`). Omitted → mirror the main store:
+   * a Lucid pricing store on the same connection when the main store is Lucid, otherwise off.
+   */
   async #resolvePricing(config: AgentConfig): Promise<AgentPricingStore | undefined> {
     const pricingStore = config.pricingStore;
-    if (pricingStore === undefined) return undefined;
+    if (pricingStore === false) return undefined;
+    if (pricingStore === undefined) {
+      const connection = this.#mainStoreLucidConnection(config);
+      if (connection === undefined) return undefined;
+      return pricingStores.lucid(connection === null ? {} : { connection })({ app: this.app });
+    }
     return typeof pricingStore === 'function' ? pricingStore({ app: this.app }) : pricingStore;
   }
 
   /**
-   * Build the governance read-model from config (a `GovernanceQueriesFactory` thunk or a ready
-   * instance). The factory receives the already-resolved `pricingStore` so the Lucid read-model prices
-   * its rollups against the loop's live prices. `undefined` → the `/agent/governance/*` routes aren't
-   * mounted.
+   * Build the governance read-model. `false` disables it (the `/agent/governance/*` routes aren't
+   * mounted). Omitted → mirror the main store: a Lucid read-model on the same connection when the main
+   * store is Lucid, otherwise off. The factory receives the already-resolved `pricingStore` so the
+   * Lucid read-model prices its rollups against the loop's live prices.
    */
   async #resolveGovernance(
     config: AgentConfig,
     pricingStore: AgentPricingStore | undefined,
   ): Promise<AgentGovernanceQueries | undefined> {
     const governance = config.governanceQueries;
-    if (governance === undefined) return undefined;
-    return typeof governance === 'function'
-      ? governance({ app: this.app, ...(pricingStore !== undefined ? { pricingStore } : {}) })
-      : governance;
+    if (governance === false) return undefined;
+    const ctx = { app: this.app, ...(pricingStore !== undefined ? { pricingStore } : {}) };
+    if (governance === undefined) {
+      const connection = this.#mainStoreLucidConnection(config);
+      if (connection === undefined) return undefined;
+      return governanceQueriesFactories.lucid(connection === null ? {} : { connection })(ctx);
+    }
+    return typeof governance === 'function' ? governance(ctx) : governance;
   }
 
   /** Build the inject-mode retriever from config (a `RetrieverFactory` thunk or a ready instance). */

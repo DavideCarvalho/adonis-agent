@@ -97,18 +97,27 @@ export interface AgentConfig {
   /**
    * Prices each turn's tokens into the assistant message's `usage.costUsd`. A provider-reported cost
    * (a gateway) always wins; otherwise the loop estimates from this store's current price rows (fetched
-   * once per run). Omit → `costUsd` is always `null` (never a fabricated `0`). Use
-   * `pricingStores.lucid()` for the SQL-backed table or `pricingStores.memory()` for tests.
+   * once per run).
+   *
+   * Defaults to mirroring the main {@link store}: when `store` is a `stores.lucid()` store, pricing is
+   * a Lucid store on the SAME connection (table auto-created) with no config needed. Pass a factory /
+   * instance to override (e.g. a different connection or `pricingStores.memory()` for tests), or
+   * `false` to disable — with no pricing store, `costUsd` is always `null` (never a fabricated `0`).
+   * When the main store is not Lucid, pricing is off unless set explicitly.
    */
-  pricingStore?: AgentPricingStore | PricingFactory;
+  pricingStore?: AgentPricingStore | PricingFactory | false;
   /**
-   * The governance read-model the optional `/agent/governance/*` read routes serve from — per-model /
-   * per-actor cost & usage rollups, the daily usage trend, and recent tool-call / thread activity over
-   * the persisted agent tables. Pass an {@link AgentGovernanceQueries} instance, or a lazy
-   * `governanceQueries.lucid()` factory (which prices its rollups against the configured `pricingStore`).
-   * Omit → the governance routes are not mounted. Read-only; safe to leave off.
+   * The governance read-model the `/agent/governance/*` read routes serve from — per-model / per-actor
+   * cost & usage rollups, the daily usage trend, and recent tool-call / thread activity over the
+   * persisted agent tables.
+   *
+   * Defaults to mirroring the main {@link store}: when `store` is a `stores.lucid()` store, this is a
+   * Lucid read-model on the SAME connection (and the routes are mounted) with no config needed. Pass a
+   * factory / instance to override, or `false` to disable — with it off, the `/agent/governance/*`
+   * routes are not mounted. When the main store is not Lucid, governance is off unless set explicitly.
+   * Read-only.
    */
-  governanceQueries?: AgentGovernanceQueries | GovernanceQueriesFactory;
+  governanceQueries?: AgentGovernanceQueries | GovernanceQueriesFactory | false;
   /**
    * Enables always-on ("inject") RAG: before each turn the loop retrieves passages for the user message
    * and folds them into the system prompt (replay-safe under durable). Pass a {@link Retriever} directly
