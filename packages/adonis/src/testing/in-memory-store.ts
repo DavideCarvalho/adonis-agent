@@ -180,6 +180,10 @@ export class InMemoryAgentStore implements AgentStore {
     };
   }
 
+  async getThreadActorRef(threadId: string): Promise<string | null> {
+    return this.threads.get(threadId)?.actorRef ?? null;
+  }
+
   async listThreads(actorRef: string, limit = 50): Promise<ThreadSummary[]> {
     return [...this.threads.values()]
       .filter((row) => row.actorRef === actorRef && !row.transient)
@@ -321,6 +325,10 @@ export class InMemoryAgentStore implements AgentStore {
         : {}),
       ...(input.costUsd !== undefined ? { costUsd: input.costUsd } : {}),
     });
+  }
+
+  async getRunActorRef(runId: string): Promise<string | null> {
+    return this.runs.get(runId)?.actorRef ?? null;
   }
 
   async recordRunStart(input: RecordRunStartInput): Promise<void> {

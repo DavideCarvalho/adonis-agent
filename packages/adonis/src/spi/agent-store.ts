@@ -103,6 +103,12 @@ export interface RecordRunEndInput {
 export interface AgentStore {
   createThread(input: CreateThreadInput): Promise<ThreadSummary>;
   getThread(threadId: string): Promise<ThreadDetail | null>;
+  /**
+   * The owning `actor_ref` of a thread, or `null` when it is unknown (or soft-deleted). Backs the
+   * per-actor ownership check on the thread routes (`threads/:id` read/delete/fork), so a caller can
+   * only act on threads it owns.
+   */
+  getThreadActorRef(threadId: string): Promise<string | null>;
   listThreads(actorRef: string, limit?: number): Promise<ThreadSummary[]>;
   softDeleteThread(threadId: string): Promise<void>;
   forkThread(threadId: string, fromMessageId: string): Promise<ThreadSummary>;
@@ -120,6 +126,13 @@ export interface AgentStore {
 
   /** Open a run (turn) row at start. Replay-safe: the loop calls it under a durable step. */
   recordRunStart(input: RecordRunStartInput): Promise<void>;
+  /**
+   * The owning `actor_ref` of a run (turn), or `null` when the run is unknown. The loop opens the run
+   * row as its FIRST step (before the quota gate), so this is populated for the whole life of a run.
+   * Backs the per-actor ownership check on the run routes (stream re-attach, cancel, tool-call
+   * approve/reject), so a caller can only act on runs it owns.
+   */
+  getRunActorRef(runId: string): Promise<string | null>;
   /** Settle a run's outcome (terminal, first-wins). A no-op when the run is unknown or already settled. */
   recordRunEnd(input: RecordRunEndInput): Promise<void>;
 }

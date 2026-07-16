@@ -62,6 +62,8 @@ export {
 export { lucidStoreConnection } from './stores/factory.js';
 export { evaluateGovernanceGate } from './governance-gate.js';
 export type { AgentGovernanceAuthorize, GovernanceGateVerdict } from './governance-gate.js';
+export { evaluateOwnership } from './ownership.js';
+export type { OwnershipVerdict } from './ownership.js';
 export type {
   AgentConfig,
   DefaultAgentOptions,

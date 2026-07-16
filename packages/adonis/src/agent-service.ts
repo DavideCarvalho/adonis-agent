@@ -71,6 +71,16 @@ export class AgentService {
     return this.deps.forAgent().sink.subscribe(runId);
   }
 
+  /** The owning actor ref of a run (turn), or `null` if unknown — for per-actor route ownership checks. */
+  runOwner(runId: string): Promise<string | null> {
+    return this.store.getRunActorRef(runId);
+  }
+
+  /** The owning actor ref of a thread, or `null` if unknown — for per-actor route ownership checks. */
+  threadOwner(threadId: string): Promise<string | null> {
+    return this.store.getThreadActorRef(threadId);
+  }
+
   approve(runId: string, toolCallId: string): Promise<void> {
     return this.runner.signal(runId, toolCallId, { approved: true });
   }
