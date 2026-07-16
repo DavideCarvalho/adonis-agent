@@ -59,6 +59,7 @@ export {
   streamTransports,
   actorDirectories,
 } from './define_config.js';
+export { lucidStoreConnection } from './stores/factory.js';
 export type {
   AgentConfig,
   DefaultAgentOptions,

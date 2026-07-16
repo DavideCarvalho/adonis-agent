@@ -51,6 +51,32 @@ async function resolveLucidDatabase(app: ApplicationService): Promise<LucidConne
   return (await app.container.make('lucid.db')) as unknown as LucidConnectionManagerLike;
 }
 
+/**
+ * Marker carrying a `stores.lucid()` factory's configured connection, so the provider can default
+ * `pricingStore`/`governanceQueries` to the SAME Lucid connection as the main store. `null` means the
+ * app's default connection (no `connection` was passed).
+ */
+const LUCID_STORE_CONNECTION = Symbol.for('@adonis-agora/agent:lucid-store-connection');
+
+function tagLucidStore(factory: StoreFactory, connection: string | undefined): StoreFactory {
+  Object.defineProperty(factory, LUCID_STORE_CONNECTION, {
+    value: connection ?? null,
+    enumerable: false,
+  });
+  return factory;
+}
+
+/**
+ * If `factory` is a `stores.lucid()` store factory, returns its connection (`null` = the app's default
+ * connection); otherwise `undefined`. The provider uses this to mirror the main store's Lucid
+ * connection when `pricingStore`/`governanceQueries` are left at their defaults.
+ */
+export function lucidStoreConnection(factory: unknown): string | null | undefined {
+  if (typeof factory !== 'function') return undefined;
+  const value = (factory as unknown as Record<symbol, unknown>)[LUCID_STORE_CONNECTION];
+  return value === undefined ? undefined : (value as string | null);
+}
+
 /** Options for the Lucid-backed persistent store. */
 export interface LucidStoreConfig {
   /** Lucid connection name to use. Defaults to the `Database` default connection. */
@@ -95,7 +121,7 @@ export const stores = {
 
   /** Persist threads/messages/tool-calls/usage in SQL via `@adonisjs/lucid`. */
   lucid(config: LucidStoreConfig = {}): StoreFactory {
-    return async (ctx) => {
+    const factory: StoreFactory = async (ctx) => {
       const db = await resolveLucidDatabase(ctx.app);
       const { LucidAgentStore } = await import('./lucid.js');
       const client = (config.connection !== undefined
@@ -107,6 +133,8 @@ export const stores = {
           : {}),
       });
     };
+    // Tag with the connection so the provider can mirror it for pricing/governance defaults.
+    return tagLucidStore(factory, config.connection);
   },
 };
 
