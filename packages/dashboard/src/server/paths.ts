@@ -79,3 +79,20 @@ export function injectApiBase(html: string, apiBase: string): string {
   if (html.includes('</head>')) return html.replace('</head>', `${tag}</head>`);
   return `${tag}${html}`;
 }
+
+/**
+ * Inject a `<base href="${mount}/">` as the FIRST thing inside `<head>`, so the SPA's relative
+ * `./assets/*` URLs (Vite `base: './'`) resolve against the mount directory no matter whether the
+ * browser's URL carries a trailing slash. This replaces the old trailing-slash redirect, which the
+ * AdonisJS router (it normalizes trailing slashes) turned into a duplicate-route crash. `mount` is a
+ * leading-slash, no-trailing-slash path (e.g. `/agent/dashboard`).
+ */
+export function injectBaseHref(html: string, mount: string): string {
+  const tag = `<base href="${mount}/">`;
+  const headOpen = html.match(/<head[^>]*>/i);
+  if (headOpen?.index !== undefined) {
+    const at = headOpen.index + headOpen[0].length;
+    return html.slice(0, at) + tag + html.slice(at);
+  }
+  return `${tag}${html}`;
+}
