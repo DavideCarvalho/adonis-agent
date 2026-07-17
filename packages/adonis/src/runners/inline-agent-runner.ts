@@ -1,6 +1,7 @@
 import type { AgentDepsFactory } from '../agent-deps-factory.js';
 import { type AgentDeps, utcDay } from '../agent-deps.js';
 import { type AgentLoopHooks, runAgentLoop } from '../agent-loop.js';
+import { spannedAgent } from '../diagnostics.js';
 import type { AgentRunner } from '../spi/agent-runner.js';
 import type { AgentStore } from '../spi/agent-store.js';
 import type { Actor, AgentRunInput, Decision } from '../types.js';
@@ -26,7 +27,17 @@ export class InlineAgentRunner implements AgentRunner {
     const deps = this.factory.forAgent(input.agentName);
     const hooks = this.topLevelHooks(runId, deps, input.actor, day);
 
-    void runAgentLoop({ ...deps, day }, input, hooks).catch(async (error) => {
+    // The root turn span — the trace's root, correlated to every child step span by traceId = runId.
+    // Emitted by the runner (not the shared loop) because the inline runner executes the loop exactly
+    // once; the durable runner's body replays, so it roots its trace by traceId instead. Zero-cost
+    // when unobserved.
+    void spannedAgent(
+      'turn',
+      runId,
+      { runId },
+      () => runAgentLoop({ ...deps, day }, input, hooks),
+      (result) => ({ textLength: result.text.length }),
+    ).catch(async (error) => {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[@adonis-agora/agent] run ${runId} failed: ${message}`);
       // Settle the run's persisted outcome — the loop only records completions (it can't catch its
@@ -96,10 +107,18 @@ export class InlineAgentRunner implements AgentRunner {
       step: (_name, fn) => fn(),
       runAgent: (childName, childTask) => this.runNested(childName, childTask, actor, day),
     };
-    return runAgentLoop(
-      { ...deps, day },
-      { threadId: subThread.id, actor, userText: task, agentName, day },
-      hooks,
+    // A nested sub-agent run is its own trace (its own runId), rooted by the same turn span.
+    return spannedAgent(
+      'turn',
+      runId,
+      { runId },
+      () =>
+        runAgentLoop(
+          { ...deps, day },
+          { threadId: subThread.id, actor, userText: task, agentName, day },
+          hooks,
+        ),
+      (result) => ({ textLength: result.text.length }),
     );
   }
 }

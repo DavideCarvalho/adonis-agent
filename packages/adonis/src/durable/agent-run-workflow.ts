@@ -59,7 +59,11 @@ function childSinkWriter(inner: SinkWriter): SinkWriter {
  * suspend-and-resume:
  *  - `step(name, fn)` → `ctx.localStep` — every LLM turn, tool execution, and persist/quota write is a
  *    checkpoint, so a replay returns the cached result instead of re-running it (stable ids, no
- *    double-write, no re-streamed tokens).
+ *    double-write, no re-streamed tokens). The run-tracing SPANS (`agora:agent:llm.turn` /
+ *    `tool.execution` / `retrieval`) are emitted from INSIDE these step bodies, so a replay — which
+ *    skips the bodies — never re-emits them. Unlike the inline runner, the durable workflow does NOT
+ *    emit a body-level root `turn` span (the body replays, which would duplicate it); the trace is
+ *    rooted implicitly by `traceId = runId`, which every child span already carries.
  *  - `awaitApproval(call)` → `ctx.waitForSignal('tool:<runId>:<callId>')` — an action tool suspends the
  *    run with zero compute until an approve/reject signal arrives (namespaced by run, so one run's
  *    decision can never satisfy another's).

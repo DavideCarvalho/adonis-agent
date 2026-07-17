@@ -6,6 +6,7 @@ import {
   publishAgentRunStarted,
   publishAgentToolCall,
   publishAgentToolRetry,
+  spannedAgent,
 } from './diagnostics.js';
 import type { AgentStore } from './spi/agent-store.js';
 import type { ModelProvider } from './spi/model-provider.js';
@@ -278,8 +279,16 @@ export async function runAgentLoop(
   if (deps.retriever !== undefined) {
     const retriever = deps.retriever;
     const topK = deps.retrievalTopK ?? 5;
+    // Span the retrieval INSIDE the step body so durable replay (which returns the cached passages)
+    // never re-emits it. traceId = runId correlates it into the turn's waterfall.
     const passages = await hooks.step('retrieve', () =>
-      retriever.retrieve(input.userText, { topK }),
+      spannedAgent(
+        'retrieval',
+        hooks.runId,
+        { runId: hooks.runId, queryLength: input.userText.length, topK },
+        () => retriever.retrieve(input.userText, { topK }),
+        (retrieved) => ({ count: retrieved.length }),
+      ),
     );
     if (passages.length > 0) {
       injectedPassages = passages;
@@ -312,8 +321,22 @@ export async function runAgentLoop(
       intersectAllow(persona?.allowedTools, deps.toolAllowList),
     );
 
+    // Span the model call INSIDE the step body (replay-safe). The turn's raw text/output never rides
+    // the span — only token counts + name/length metadata (the point events' redaction posture).
     const turn = await hooks.step(`llm:${i}`, () =>
-      deps.model.runTurn({ system, messages: modelMessages, tools, sink: writer }),
+      spannedAgent(
+        'llm.turn',
+        hooks.runId,
+        { runId: hooks.runId, step: i },
+        () => deps.model.runTurn({ system, messages: modelMessages, tools, sink: writer }),
+        (result) => ({
+          ...(result.modelId !== undefined ? { modelId: result.modelId } : {}),
+          inputTokens: result.usage.inputTokens,
+          outputTokens: result.usage.outputTokens,
+          textLength: result.text.length,
+          toolCalls: result.toolCalls.length,
+        }),
+      ),
     );
 
     // provider-reported model wins over the configured fallback, so cost can't misattribute
@@ -496,24 +519,34 @@ export async function runAgentLoop(
         // the retries never re-run (side effects happen exactly once). A classified-transient error
         // (DB deadlock / lock-wait timeout / serialization failure) is retried in place; any other
         // failure surfaces immediately as before. `false` disables retry entirely.
+        // Span the tool execution INSIDE the step body (replay-safe). The transient-retry loop runs
+        // within the span, so the span covers all in-place attempts; the tool's output never rides it.
         const output = await hooks.step(`tool:${call.id}`, () =>
-          invokeWithTransientRetry(
-            () => deps.registry.invoke(call.name, call.input, ctx, deps.rolesPolicy),
-            deps.toolTransientRetry ?? {},
-            {
-              ...(hooks.isControlFlowError !== undefined
-                ? { isControlFlowError: hooks.isControlFlowError }
-                : {}),
-              onRetry: (attempt, retryError) => {
-                publishAgentToolRetry({
-                  runId: hooks.runId,
-                  toolName: call.name,
-                  toolCallId: call.id,
-                  attempt,
-                  message: retryError instanceof Error ? retryError.message : String(retryError),
-                });
-              },
-            },
+          spannedAgent(
+            'tool.execution',
+            hooks.runId,
+            { runId: hooks.runId, toolCallId: call.id, toolName: call.name, toolType },
+            () =>
+              invokeWithTransientRetry(
+                () => deps.registry.invoke(call.name, call.input, ctx, deps.rolesPolicy),
+                deps.toolTransientRetry ?? {},
+                {
+                  ...(hooks.isControlFlowError !== undefined
+                    ? { isControlFlowError: hooks.isControlFlowError }
+                    : {}),
+                  onRetry: (attempt, retryError) => {
+                    publishAgentToolRetry({
+                      runId: hooks.runId,
+                      toolName: call.name,
+                      toolCallId: call.id,
+                      attempt,
+                      message:
+                        retryError instanceof Error ? retryError.message : String(retryError),
+                    });
+                  },
+                },
+              ),
+            () => ({}),
           ),
         );
         await hooks.step(`persist:toolexec:${call.id}`, () =>
