@@ -113,6 +113,64 @@ describe('PgVectorStore.search — similarity SQL + bindings', () => {
     expect(bindings).toEqual([VECTOR_LITERAL, '{"tenantRef":"t1"}', VECTOR_LITERAL, 4]);
   });
 
+  it('an array filter value is set-membership via jsonb_exists_any (?| function form)', async () => {
+    const db = new RecordingDb();
+    const store = new PgVectorStore(db);
+
+    await store.search(EMBEDDING, { topK: 4, filter: { audience: ['public', 'base:42'] } });
+
+    const { sql, bindings } = db.last;
+    // The `?|` operator collides with Knex's `?` placeholder, so we use its function form.
+    expect(flat(sql)).toContain('jsonb_exists_any(');
+    expect(flat(sql)).toContain('?::text[]');
+    expect(flat(sql)).not.toContain('metadata @> ?::jsonb'); // pure array clause, no scalar containment
+    // Order: score-vector, [key ×3 for the CASE, the token array], order-vector, limit.
+    expect(bindings).toEqual([
+      VECTOR_LITERAL,
+      'audience',
+      'audience',
+      'audience',
+      ['public', 'base:42'],
+      VECTOR_LITERAL,
+      4,
+    ]);
+  });
+
+  it('an empty array filter denies via a WHERE false clause (no metadata binding)', async () => {
+    const db = new RecordingDb();
+    const store = new PgVectorStore(db);
+
+    await store.search(EMBEDDING, { topK: 7, filter: { audience: [] } });
+
+    const { sql, bindings } = db.last;
+    expect(flat(sql)).toContain('WHERE false');
+    // No filter binding is emitted for the deny clause: score-vector, order-vector, limit.
+    expect(bindings).toEqual([VECTOR_LITERAL, VECTOR_LITERAL, 7]);
+  });
+
+  it('combines a scalar clause and an array clause with AND, arrays first', async () => {
+    const db = new RecordingDb();
+    const store = new PgVectorStore(db);
+
+    await store.search(EMBEDDING, {
+      topK: 5,
+      filter: { audience: ['public'], collectionId: 'c1' },
+    });
+
+    const { sql, bindings } = db.last;
+    expect(flat(sql)).toMatch(/jsonb_exists_any\(.*\) AND metadata @> \?::jsonb/);
+    expect(bindings).toEqual([
+      VECTOR_LITERAL,
+      'audience',
+      'audience',
+      'audience',
+      ['public'],
+      '{"collectionId":"c1"}',
+      VECTOR_LITERAL,
+      5,
+    ]);
+  });
+
   it('maps rows to passages (score→Number, jsonb metadata, source)', async () => {
     const db = new RecordingDb([
       { id: 'a#0', text: 'hello', source: 'README', metadata: { lang: 'en' }, score: '0.87' },

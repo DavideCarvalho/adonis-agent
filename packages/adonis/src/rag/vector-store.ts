@@ -12,7 +12,11 @@ export interface VectorRecord {
 
 export interface VectorSearchOptions {
   topK: number;
-  /** Exact-match metadata filter (all keys must equal). Passed through from `RetrieveOptions.filter`. */
+  /**
+   * Metadata filter, passed through from `RetrieveOptions.filter`. A scalar value is exact-match; an
+   * array value is match-any (OR / set membership), with an empty array denying everything — the
+   * capability-token ACL primitive. See {@link import('./filter.js').matchesFilter}.
+   */
   filter?: Record<string, unknown>;
 }
 

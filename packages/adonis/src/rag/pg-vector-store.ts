@@ -103,6 +103,56 @@ export function toVectorLiteral(embedding: number[]): string {
   return `[${embedding.join(',')}]`;
 }
 
+/**
+ * Build the metadata `WHERE` fragment for a filter, using Lucid/Knex positional `?` bindings (never
+ * string interpolation). Two predicate kinds:
+ *
+ * - **scalar** filter values collapse into a single jsonb-containment check (`metadata @> ?::jsonb`) —
+ *   exact-match, byte-for-byte the previous behavior so scalar filters stay backward compatible.
+ * - an **array** filter value is a **match-any** (OR / set membership) check: the record matches when
+ *   its value for that key — scalar or array — shares an element with the filter array. An empty array
+ *   can never match (the `false` deny primitive).
+ *
+ * Set membership uses `jsonb_exists_any(jsonb, text[])` — the function form of the `?|` operator, chosen
+ * because bare `?|` collides with Knex's `?` binding placeholder. The metadata KEY is itself a `?`
+ * binding (`metadata->?`), so a caller-supplied key can never inject SQL; only the (already validated)
+ * table/column identifiers are ever spliced in. Returns `{ sql: '', bindings: [] }` when there is no
+ * filter, preserving the previous unfiltered query shape.
+ */
+function buildMetadataWhere(
+  filter: Record<string, unknown> | undefined,
+  metadataColumn: string,
+): { sql: string; bindings: unknown[] } {
+  if (filter === undefined || Object.keys(filter).length === 0) {
+    return { sql: '', bindings: [] };
+  }
+  const clauses: string[] = [];
+  const bindings: unknown[] = [];
+  const scalar: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(filter)) {
+    if (Array.isArray(value)) {
+      if (value.length === 0) {
+        clauses.push('false');
+        continue;
+      }
+      // Coerce the record's value to an array (a scalar becomes a one-element array) so `?|` set
+      // membership works uniformly, then test overlap with the caller's tokens.
+      clauses.push(
+        `jsonb_exists_any(CASE WHEN jsonb_typeof(${metadataColumn}->?) = 'array' ` +
+          `THEN ${metadataColumn}->? ELSE jsonb_build_array(${metadataColumn}->?) END, ?::text[])`,
+      );
+      bindings.push(key, key, key, value.map(String));
+    } else {
+      scalar[key] = value;
+    }
+  }
+  if (Object.keys(scalar).length > 0) {
+    clauses.push(`${metadataColumn} @> ?::jsonb`);
+    bindings.push(JSON.stringify(scalar));
+  }
+  return { sql: `WHERE ${clauses.join(' AND ')}`, bindings };
+}
+
 /** Normalize whatever a Lucid `rawQuery` returns (PG `{rows}`, SQLite array, MySQL `[rows,fields]`). */
 function normalizeRows(raw: unknown): Record<string, unknown>[] {
   if (Array.isArray(raw)) {
@@ -146,8 +196,9 @@ function documentIdExpr(col: string): string {
  * {@link LucidDatabaseLike} (so `@adonisjs/lucid` stays an optional peer — this file imports no Lucid
  * types) with raw SQL for the pgvector operators. Similarity ranks via the `<=>`/`<->`/`<#>` operator for
  * the configured {@link PgVectorMetric}; the query embedding is always a `?::vector` positional binding
- * (NEVER string-interpolated) and metadata filters an `@> ?::jsonb` binding, so only the (validated)
- * table/column identifiers are ever spliced into a statement.
+ * (NEVER string-interpolated). Scalar metadata filters are an `@> ?::jsonb` containment binding; an
+ * array filter value is set-membership (`jsonb_exists_any`, the `?|` function form) — the capability-token
+ * ACL primitive. Only the (validated) table/column identifiers are ever spliced into a statement.
  *
  * Usually you don't construct this directly: `config/agent.ts` selects it via `retrievers.pgvector({...})`
  * and the provider builds it, lazily importing `@adonisjs/lucid` only when the pgvector retriever is
@@ -237,13 +288,13 @@ export class PgVectorStore implements VectorStore {
   async listDocuments(filter?: Record<string, unknown>): Promise<IndexedDocument[]> {
     const c = this.col;
     const docExpr = documentIdExpr(c.id);
-    const hasFilter = filter !== undefined && Object.keys(filter).length > 0;
+    const where = buildMetadataWhere(filter, c.metadata);
     const raw = await this.db.rawQuery(
       `SELECT DISTINCT ON (${docExpr}) ${docExpr} AS doc_id, ${c.metadata} AS metadata
        FROM ${this.table}
-       ${hasFilter ? `WHERE ${c.metadata} @> ?::jsonb` : ''}
+       ${where.sql}
        ORDER BY ${docExpr}`,
-      hasFilter ? [JSON.stringify(filter)] : [],
+      where.bindings,
     );
     return normalizeRows(raw).map((row) => {
       const metadata = parseMetadata(row.metadata);
@@ -257,22 +308,16 @@ export class PgVectorStore implements VectorStore {
   async search(embedding: number[], options: VectorSearchOptions): Promise<Passage[]> {
     const c = this.col;
     const vector = toVectorLiteral(embedding);
-    const hasFilter = options.filter !== undefined && Object.keys(options.filter).length > 0;
+    const where = buildMetadataWhere(options.filter, c.metadata);
     // Bindings are consumed positionally, in the exact order the `?`s appear: score expr (embedding),
-    // then the optional filter, then the ORDER BY embedding, then the LIMIT. The embedding is bound
-    // TWICE — once per `?::vector` — because a positional `?` cannot be reused like a numbered `$1`.
-    const bindings: unknown[] = [vector];
-    let where = '';
-    if (hasFilter) {
-      where = `WHERE ${c.metadata} @> ?::jsonb`;
-      bindings.push(JSON.stringify(options.filter));
-    }
-    bindings.push(vector, options.topK);
+    // then the optional filter clause(s), then the ORDER BY embedding, then the LIMIT. The embedding is
+    // bound TWICE — once per `?::vector` — because a positional `?` cannot be reused like a numbered `$1`.
+    const bindings: unknown[] = [vector, ...where.bindings, vector, options.topK];
     const raw = await this.db.rawQuery(
       `SELECT ${c.id} AS id, ${c.text} AS text, ${c.source} AS source, ${c.metadata} AS metadata,
               ${this.metric.score(c.embedding)} AS score
        FROM ${this.table}
-       ${where}
+       ${where.sql}
        ORDER BY ${c.embedding} ${this.metric.operator} ?::vector
        LIMIT ?`,
       bindings,
