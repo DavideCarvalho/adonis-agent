@@ -232,7 +232,11 @@ describe('aiSdkModel', () => {
         content: 'let me check',
         toolCalls: [{ id: 'c1', name: 'search', input: { q: 'x' } }],
       },
-      { role: 'user', content: '', toolResults: [{ id: 'c1', name: 'search', output: { hits: 2 } }] },
+      {
+        role: 'user',
+        content: '',
+        toolResults: [{ id: 'c1', name: 'search', output: { hits: 2 } }],
+      },
     ];
 
     await aiSdkModel('openai/gpt-4o').runTurn({
@@ -270,9 +274,9 @@ describe('aiSdkModel', () => {
     // follow the assistant `tool-call` message — no empty user turn wedged between them.
     const assistantIndex = passed.findIndex((m: { role: string }) => m.role === 'assistant');
     expect(passed[assistantIndex + 1].role).toBe('tool');
-    expect(passed.some((m: { role: string; content: string }) => m.role === 'user' && m.content === '')).toBe(
-      false,
-    );
+    expect(
+      passed.some((m: { role: string; content: string }) => m.role === 'user' && m.content === ''),
+    ).toBe(false);
   });
 
   it('maps a user message with an image attachment to text + image content parts', async () => {
