@@ -66,6 +66,14 @@ export function AiTool(options: AiToolOptions) {
   };
 }
 
+/** Read the `@AiTool` decorator's stamped {@link AI_TOOL_META_KEY} metadata off a value, if present. */
+function decoratorMeta(target: unknown): AiToolMeta | undefined {
+  if (target === null || (typeof target !== 'function' && typeof target !== 'object')) {
+    return undefined;
+  }
+  return (target as { [AI_TOOL_META_KEY]?: AiToolMeta })[AI_TOOL_META_KEY];
+}
+
 /** Read a class's tool metadata off its `static tool = { name, kind, … }` config, if any. */
 function staticToolMeta(target: unknown): AiToolMeta | undefined {
   if (typeof target !== 'function') return undefined;
@@ -76,30 +84,28 @@ function staticToolMeta(target: unknown): AiToolMeta | undefined {
   return undefined;
 }
 
+/** Resolve either authoring mechanism — `@AiTool` decorator or `static tool` — from one value. */
+function metaOn(target: unknown): AiToolMeta | undefined {
+  return decoratorMeta(target) ?? staticToolMeta(target);
+}
+
 /**
- * Read a tool class's {@link AiToolMeta}. Two authoring forms are supported, in this order:
+ * Read a tool class's {@link AiToolMeta}. Two authoring forms are supported:
  *
  * 1. The `@AiTool({ … })` decorator (stamps {@link AI_TOOL_META_KEY}).
  * 2. A decorator-free `static tool = { name, kind, description, input, … }` config on the class — the
  *    same shape, mirroring `@adonis-agora/durable`'s `static workflow`. Preferred where you'd rather
  *    not rely on decorators.
  *
- * Accepts either the class itself or an instance (whose constructor carries the config).
+ * Accepts either the class itself or an instance: each mechanism is tried on the value, then on its
+ * constructor (so an instance resolves the class's metadata).
  */
 export function readAiToolMeta(target: unknown): AiToolMeta | undefined {
   if (target === null || (typeof target !== 'function' && typeof target !== 'object')) {
     return undefined;
   }
-  const direct = (target as { [AI_TOOL_META_KEY]?: AiToolMeta })[AI_TOOL_META_KEY];
-  if (direct !== undefined) {
-    return direct;
-  }
-  const ctor = (target as { constructor?: { [AI_TOOL_META_KEY]?: AiToolMeta } }).constructor;
-  const fromCtor = ctor?.[AI_TOOL_META_KEY];
-  if (fromCtor !== undefined) {
-    return fromCtor;
-  }
-  return staticToolMeta(target) ?? staticToolMeta(ctor);
+  const ctor = (target as { constructor?: unknown }).constructor;
+  return metaOn(target) ?? metaOn(ctor);
 }
 
 /** A tool expressed as data + handler (from {@link defineTool}), not an `@AiTool` class. */
