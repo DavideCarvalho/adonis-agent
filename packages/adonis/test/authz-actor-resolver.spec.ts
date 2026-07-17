@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  authzActorResolver,
   type AuthzRolesSourceLike,
   type AuthzTenantScope,
+  authzActorResolver,
 } from '../src/authz/index.js';
 
 const ACCESSOR = Symbol.for('@agora/context:accessor');
