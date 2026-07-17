@@ -115,12 +115,20 @@ function mapMessages(messages: ModelMessage[]): SdkModelMessage[] {
       continue;
     }
     if (message.role === 'user') {
-      const attachments = message.attachments ?? [];
-      out.push(
-        attachments.length === 0
-          ? { role: 'user', content: message.content }
-          : { role: 'user', content: userContentWithAttachments(message.content, attachments) },
-      );
+      const toolResults = message.toolResults ?? [];
+      // A pure tool-result carrier (`{ content: '', toolResults }`, pushed by the agent loop to
+      // feed results back to the model) must NOT also emit an empty user turn — the SDK requires
+      // the `tool` message to immediately follow the assistant `tool-call` message, and a wedged
+      // empty user message in between breaks that adjacency (`AI_MissingToolResultsError`).
+      if (message.content.length > 0 || toolResults.length === 0) {
+        const attachments = message.attachments ?? [];
+        out.push(
+          attachments.length === 0
+            ? { role: 'user', content: message.content }
+            : { role: 'user', content: userContentWithAttachments(message.content, attachments) },
+        );
+      }
+      pushToolResults(out, toolResults);
       continue;
     }
 
@@ -143,22 +151,32 @@ function mapMessages(messages: ModelMessage[]): SdkModelMessage[] {
       out.push({ role: 'assistant', content: message.content });
     }
 
-    const toolResults = message.toolResults ?? [];
-    if (toolResults.length > 0) {
-      out.push({
-        role: 'tool',
-        content: toolResults.map(
-          (result): ToolResultPart => ({
-            type: 'tool-result',
-            toolCallId: result.id,
-            toolName: result.name,
-            output: toModelOutput(result),
-          }),
-        ),
-      });
-    }
+    pushToolResults(out, message.toolResults ?? []);
   }
   return out;
+}
+
+/**
+ * Append a `tool` message mapping each core `ToolResult` to an SDK `ToolResultPart`, when there
+ * are any. Shared by the assistant branch (tool results following its own tool-calls) and the
+ * user branch (the agent loop's `{ role: 'user', content: '', toolResults }` carrier) so both
+ * faithfully surface results to the SDK instead of silently dropping them.
+ */
+function pushToolResults(out: SdkModelMessage[], toolResults: ToolResult[]): void {
+  if (toolResults.length === 0) {
+    return;
+  }
+  out.push({
+    role: 'tool',
+    content: toolResults.map(
+      (result): ToolResultPart => ({
+        type: 'tool-result',
+        toolCallId: result.id,
+        toolName: result.name,
+        output: toModelOutput(result),
+      }),
+    ),
+  });
 }
 
 /** `Array<TextPart | ToolCallPart>` is a valid `AssistantContent`; name the widening explicitly. */

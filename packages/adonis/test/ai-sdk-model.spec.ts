@@ -220,6 +220,65 @@ describe('aiSdkModel', () => {
     ]);
   });
 
+  it('maps a user-role tool-result carrier (agent loop feedback) to a `tool` message immediately following the assistant tool-call, with no empty user message in between', async () => {
+    // This mirrors what `agent-loop.ts` pushes after executing a tool call: NOT an assistant
+    // message (the assistant tool-call message already went in on a prior turn) — a synthetic
+    // `{ role: 'user', content: '', toolResults }` carrier meant only to feed the result back.
+    const messages: ModelMessage[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'search for x' },
+      {
+        role: 'assistant',
+        content: 'let me check',
+        toolCalls: [{ id: 'c1', name: 'search', input: { q: 'x' } }],
+      },
+      {
+        role: 'user',
+        content: '',
+        toolResults: [{ id: 'c1', name: 'search', output: { hits: 2 } }],
+      },
+    ];
+
+    await aiSdkModel('openai/gpt-4o').runTurn({
+      system: '',
+      messages,
+      tools: [],
+      sink: createSink(),
+    });
+
+    const passed = streamTextMock.mock.calls[0]?.[0].messages;
+    expect(passed).toEqual([
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'search for x' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'let me check' },
+          { type: 'tool-call', toolCallId: 'c1', toolName: 'search', input: { q: 'x' } },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'c1',
+            toolName: 'search',
+            output: { type: 'text', value: '{"hits":2}' },
+          },
+        ],
+      },
+    ]);
+
+    // Explicitly assert the adjacency the AI SDK requires: the `tool` message must directly
+    // follow the assistant `tool-call` message — no empty user turn wedged between them.
+    const assistantIndex = passed.findIndex((m: { role: string }) => m.role === 'assistant');
+    expect(passed[assistantIndex + 1].role).toBe('tool');
+    expect(
+      passed.some((m: { role: string; content: string }) => m.role === 'user' && m.content === ''),
+    ).toBe(false);
+  });
+
   it('maps a user message with an image attachment to text + image content parts', async () => {
     const messages: ModelMessage[] = [
       {
