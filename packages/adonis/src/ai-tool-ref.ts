@@ -77,9 +77,12 @@ function decoratorMeta(target: unknown): AiToolMeta | undefined {
 /** Read a class's tool metadata off its `static tool = { name, kind, … }` config, if any. */
 function staticToolMeta(target: unknown): AiToolMeta | undefined {
   if (typeof target !== 'function') return undefined;
-  const config = (target as { tool?: AiToolOptions }).tool;
+  const config = (target as { tool?: Partial<AiToolOptions> }).tool;
   if (config && typeof config === 'object' && typeof config.name === 'string') {
-    return config;
+    // `kind` pode vir do próprio config (BaseTool / @AiTool) ou da estática do base kind-específico
+    // (ReadTool → 'read', ActionTool → 'action'), que o deixa fora do `static tool` da subclasse.
+    const kind = config.kind ?? (target as { kind?: AiToolOptions['kind'] }).kind;
+    return { ...config, kind } as AiToolMeta;
   }
   return undefined;
 }
