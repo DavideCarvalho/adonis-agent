@@ -142,9 +142,9 @@ export function isBrandedFunctionalTool(value: unknown): value is BrandedFunctio
  * )
  * ```
  */
-export function defineTool<I = unknown>(
+export function defineTool<I = unknown, O = unknown>(
   options: AiToolOptions,
-  execute: (input: I, ctx: AiToolCtx) => Promise<unknown> | unknown,
+  execute: (input: I, ctx: AiToolCtx) => Promise<O> | O,
 ): BrandedFunctionalTool {
   const spec: ToolSpec = {
     name: options.name,

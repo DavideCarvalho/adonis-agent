@@ -16,7 +16,11 @@ export interface AiToolCtx {
   host?: unknown;
 }
 
-/** A tool implementation. `I` is the parsed (Zod-validated) input. */
-export interface ToolHandler<I = unknown> {
-  execute(input: I, ctx: AiToolCtx): Promise<unknown>;
+/**
+ * A tool implementation. `I` is the parsed (Zod-validated) input; `O` is what `execute` returns
+ * (serialized back to the model). `O` defaults to `unknown` — so `ToolHandler<I>` keeps working —
+ * but typing it lets the compiler check the return against what the tool promises.
+ */
+export interface ToolHandler<I = unknown, O = unknown> {
+  execute(input: I, ctx: AiToolCtx): Promise<O> | O;
 }

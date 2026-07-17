@@ -2,6 +2,7 @@ export const VERSION = '0.8.0';
 
 export * from './types.js';
 export * from './spi/tool.js';
+export * from './base-tool.js';
 export * from './spi/model-provider.js';
 export * from './spi/token-stream-sink.js';
 export * from './spi/agent-store.js';
