@@ -29,3 +29,34 @@ export abstract class BaseTool<I = unknown, O = unknown> implements ToolHandler<
   static tool?: AiToolOptions;
   abstract execute(input: I, ctx: AiToolCtx): Promise<O> | O;
 }
+
+/** A config de um tool nas bases kind-específicas: {@link AiToolOptions} sem o `kind` (o base o fixa). */
+export type BaseToolOptions = Omit<AiToolOptions, 'kind'>;
+
+/**
+ * Bases kind-específicas — `ReadTool` fixa `kind: 'read'`, `ActionTool` fixa `kind: 'action'`. Como a
+ * subclasse NÃO declara `kind`, o `static tool = { name, description, input, ability }` fica sem nenhum
+ * campo de união e type-checa **truly bare** — sem `satisfies AiToolOptions` e sem a anotação
+ * `: AiToolOptions` (que o `kind: 'read' | 'action'` do {@link BaseTool} exigiria, já que a estática
+ * herdada não dá contextual-typing e o literal alargaria `kind` para `string`). A descoberta lê o
+ * `kind` da estática do base. Continua tipando `execute` por `<I, O>`.
+ *
+ * ```ts
+ * export default class FilaDeAlocacao extends ReadTool<Input, Row[]> {
+ *   static tool = { name: 'fila_de_alocacao', description: '…', input: z.object({}), ability: '…' }
+ *   async execute(_input: Input, ctx: AiToolCtx): Promise<Row[]> { … }
+ * }
+ * ```
+ */
+export abstract class ReadTool<I = unknown, O = unknown> implements ToolHandler<I, O> {
+  static readonly kind = 'read';
+  static tool?: BaseToolOptions;
+  abstract execute(input: I, ctx: AiToolCtx): Promise<O> | O;
+}
+
+/** Base kind-específica para tools `action` (exigem aprovação humana). Ver {@link ReadTool}. */
+export abstract class ActionTool<I = unknown, O = unknown> implements ToolHandler<I, O> {
+  static readonly kind = 'action';
+  static tool?: BaseToolOptions;
+  abstract execute(input: I, ctx: AiToolCtx): Promise<O> | O;
+}
