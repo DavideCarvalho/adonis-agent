@@ -1,5 +1,17 @@
 # @adonis-agora/agent
 
+## 0.7.1
+
+### Patch Changes
+
+- [#21](https://github.com/DavideCarvalho/adonis-agent/pull/21) [`d02b26b`](https://github.com/DavideCarvalho/adonis-agent/commit/d02b26bea2acd8d6f7daac166116a6813d321a02) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Internal: simplify `readAiToolMeta` metadata resolution
+
+  Refactor the tool-metadata lookup so the two authoring mechanisms (`@AiTool`
+  decorator and `static tool`) and the two subjects (the value, its constructor)
+  are composed explicitly — `metaOn(target) ?? metaOn(ctor)` — instead of a flat
+  four-way fallback chain. No behavior or API change; discovery of both forms is
+  unchanged (mutation-proven).
+
 ## 0.7.0
 
 ### Minor Changes
