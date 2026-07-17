@@ -9,8 +9,10 @@ export interface RerankOptions {
  * Re-scores retrieved passages against the query with a stronger (usually cross-encoder) model than
  * the first-stage retriever — the standard precision boost for RAG. It's a black box like
  * {@link import('./retriever.js').Retriever}: bring a Cohere/Voyage rerank endpoint or a local
- * cross-encoder. Provider implementations are deferred this round (SPI only); the testing kit ships a
- * trivial identity reranker. Mirrors the reference `Reranker` contract exactly.
+ * cross-encoder. Compose one over a base retriever with
+ * {@link import('../rag/reranking-retriever.js').RerankingRetriever}. Provider implementations are
+ * deferred this round (SPI only); the testing kit ships a deterministic lexical-overlap reranker.
+ * Mirrors the reference `Reranker` contract exactly.
  */
 export interface Reranker {
   /** Re-order `passages` by relevance to `query`, rewriting their `score`; may drop to `topK`. */

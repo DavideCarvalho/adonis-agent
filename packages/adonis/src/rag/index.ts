@@ -10,6 +10,12 @@ export { matchesFilter } from './filter.js';
 export { MemoryVectorStore, cosineSimilarity } from './memory-vector-store.js';
 export { EmbeddingRetriever } from './embedding-retriever.js';
 export {
+  RerankingRetriever,
+  type RerankingRetrieverOptions,
+} from './reranking-retriever.js';
+export { KeywordRetriever, type KeywordRetrieverOptions } from './keyword-retriever.js';
+export { HybridRetriever, type HybridRetrieverOptions } from './hybrid-retriever.js';
+export {
   PgVectorStore,
   PgVectorRetriever,
   toVectorLiteral,

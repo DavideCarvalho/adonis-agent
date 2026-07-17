@@ -43,16 +43,31 @@ function hashToken(token: string, dimensions: number): number {
 }
 
 /**
- * A trivial identity {@link Reranker} for tests: keeps the retriever's order, only truncating to
- * `topK`. Stands in for a real cross-encoder rerank endpoint (provider impls deferred this round).
+ * A deterministic, offline {@link Reranker} for tests: re-scores each passage by how many distinct
+ * query terms it contains (lexical overlap), then sorts descending and truncates to `topK`. No model,
+ * no randomness — enough to prove {@link import('../rag/reranking-retriever.js').RerankingRetriever}
+ * genuinely RE-ORDERS candidates (not just truncates) against a known-relevant passage. Stands in for a
+ * real cross-encoder rerank endpoint (provider impls deferred this round). Mirrors the reference fake.
  */
 export class FakeReranker implements Reranker {
   async rerank(
-    _query: string,
+    query: string,
     passages: Passage[],
     options: RerankOptions = {},
   ): Promise<Passage[]> {
-    return options.topK !== undefined ? passages.slice(0, options.topK) : passages;
+    const terms = new Set(query.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+    const scored = passages.map((passage) => {
+      const words = new Set(passage.text.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+      let overlap = 0;
+      for (const term of terms) {
+        if (words.has(term)) {
+          overlap += 1;
+        }
+      }
+      return { ...passage, score: overlap };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    return options.topK !== undefined ? scored.slice(0, options.topK) : scored;
   }
 }
 
