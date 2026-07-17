@@ -8,3 +8,5 @@ export type {
   AuthzServiceLike,
   AuthzTenantScope,
 } from './authz-tool-authorizer.js';
+export { AuthzActorResolver, authzActorResolver } from './authz-actor-resolver.js';
+export type { AuthzActorResolverConfig, AuthzRolesSourceLike } from './authz-actor-resolver.js';
