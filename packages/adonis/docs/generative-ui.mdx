@@ -158,7 +158,7 @@ export type StreamFrame =
 
 ### The `event: component` SSE frame
 
-The provider's `frameToSse` maps each frame to its wire envelope:
+The exported `frameToSse` helper maps each frame to its wire envelope:
 
 ```ts
 export function frameToSse(frame: StreamFrame): string {

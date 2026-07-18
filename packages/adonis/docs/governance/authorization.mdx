@@ -93,7 +93,7 @@ The three outcomes are deliberate:
 | someone else's | `false` | `{ ok: false, status: 403 }` | Not the owner, not privileged. |
 | someone else's | `true` | `{ ok: true, status: 200 }` | A cross-actor privileged caller (see below) may act across actors. |
 
-Inside the provider, the private `#assertOwner(ctx, actor, ownerRef, kind, governanceAuthorize)` helper wires this into the request: it looks up the record's owner (`service.runOwner(id)` / `service.threadOwner(id)`), computes `privileged` by running the same `governanceAuthorize` gate used for the governance read-model, then applies `evaluateOwnership`. On a non-`ok` verdict it replies the verdict's status (`404` → `"<kind> not found"`, `403` → `"forbidden"`) and short-circuits the handler.
+On every owner-scoped route the request is checked before the handler runs: the record's owner is looked up, `privileged` is computed by running the same `governanceAuthorize` gate used for the governance read-model, and `evaluateOwnership` produces the verdict. On a non-`ok` verdict the request is answered with the verdict's status (`404` → `"<kind> not found"`, `403` → `"forbidden"`) and the handler never runs.
 
 <Callout type="info" title="Which routes are owner-scoped">
 `POST /agent/chat` (only when continuing an existing `threadId`), `GET /agent/chat/:runId/stream`, `POST /agent/chat/:runId/cancel`, `POST /agent/tool-call/approve`, `POST /agent/tool-call/reject`, `GET /agent/threads/:id`, `DELETE /agent/threads/:id`, and `POST /agent/threads/:id/fork-from/:messageId` all enforce ownership. A **new** chat (no `threadId`) has no owner to check; the actor-scoped list routes (`GET /agent/threads`, `GET /agent/quota/today`) are already filtered to `actor.id`.
