@@ -36,7 +36,7 @@ These routes serve **cross-actor** data — every actor's spend, usage, threads,
 - **Omit `governanceAuthorize`** and any authenticated actor may read the whole read-model — the historical behavior, correct only when every authenticated caller is trusted staff. The provider logs a startup warning when the routes mount without a gate; typically you set it to an ADMIN check.
 
 <Callout type="warn" title="Not open to any authenticated actor">
-Earlier releases mounted these routes for any resolved actor. Since `0.5.0` the cross-actor read-model is gated by `governanceAuthorize`, and per-actor chat records are protected by [object-level ownership](/docs/agent/governance/authorization#object-level-ownership). Configure the gate (e.g. an ADMIN check) before exposing governance to a mixed audience.
+The cross-actor read-model is gated by `governanceAuthorize`, and per-actor chat records are protected by [object-level ownership](/docs/agent/governance/authorization#object-level-ownership). Configure the gate (e.g. an ADMIN check) before exposing governance to a mixed audience.
 </Callout>
 
 ## The routes
