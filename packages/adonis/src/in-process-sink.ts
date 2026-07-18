@@ -1,16 +1,16 @@
-import type { SinkWriter, TokenStreamSink } from './spi/token-stream-sink.js';
+import type { SinkWriter, StreamFrame, TokenStreamSink } from './spi/token-stream-sink.js';
 
 interface RunBuffer {
-  chunks: Uint8Array[];
+  chunks: StreamFrame[];
   ended: boolean;
   notify: Set<() => void>;
 }
 
 /**
- * The default {@link TokenStreamSink}: buffers chunks per run in-process so a reconnecting
+ * The default {@link TokenStreamSink}: buffers typed frames per run in-process so a reconnecting
  * subscriber replays everything so far, then follows live until the run ends. Good for a single
  * replica; a multi-replica deployment needs a shared (Redis) sink so any pod can serve any run's
- * stream. Byte-identical to the `InMemoryTokenStreamSink` shipped from `./testing`.
+ * stream. Identical (frame-for-frame) to the `InMemoryTokenStreamSink` shipped from `./testing`.
  */
 export class InProcessTokenStreamSink implements TokenStreamSink {
   private readonly runs = new Map<string, RunBuffer>();
@@ -34,8 +34,8 @@ export class InProcessTokenStreamSink implements TokenStreamSink {
   open(runId: string): SinkWriter {
     const buf = this.buffer(runId);
     return {
-      write: (chunk: Uint8Array) => {
-        buf.chunks.push(chunk);
+      write: (frame: StreamFrame) => {
+        buf.chunks.push(frame);
         this.wake(buf);
       },
       end: () => {
@@ -45,7 +45,7 @@ export class InProcessTokenStreamSink implements TokenStreamSink {
     };
   }
 
-  async *subscribe(runId: string): AsyncIterable<Uint8Array> {
+  async *subscribe(runId: string): AsyncIterable<StreamFrame> {
     const buf = this.buffer(runId);
     let index = 0;
     while (true) {

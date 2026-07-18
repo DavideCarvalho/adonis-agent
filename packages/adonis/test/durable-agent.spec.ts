@@ -70,10 +70,9 @@ function buildGraph(
 }
 
 async function collectStream(g: Graph, runId: string): Promise<string> {
-  const decoder = new TextDecoder();
   let text = '';
-  for await (const chunk of g.service.subscribe(runId)) {
-    text += decoder.decode(chunk);
+  for await (const frame of g.service.subscribe(runId)) {
+    if (frame.t === 'text') text += frame.v;
   }
   return text;
 }

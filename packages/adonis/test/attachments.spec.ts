@@ -73,10 +73,9 @@ function buildDurable(script: FakeScript) {
 }
 
 async function collectStream(service: AgentService, runId: string): Promise<string> {
-  const decoder = new TextDecoder();
   let text = '';
-  for await (const chunk of service.subscribe(runId)) {
-    text += decoder.decode(chunk);
+  for await (const frame of service.subscribe(runId)) {
+    if (frame.t === 'text') text += frame.v;
   }
   return text;
 }

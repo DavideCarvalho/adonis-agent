@@ -26,8 +26,7 @@ export class FakeModelProvider implements ModelProvider {
     const turnIndex = args.messages.filter((message) => message.role === 'assistant').length;
     const turn = this.script(args, turnIndex);
 
-    const encoder = new TextEncoder();
-    await args.sink.write(encoder.encode(turn.text));
+    await args.sink.write({ t: 'text', v: turn.text });
 
     const toolCalls = turn.toolCall
       ? [

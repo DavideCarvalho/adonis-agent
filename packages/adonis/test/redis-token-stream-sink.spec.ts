@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { InProcessTokenStreamSink, RedisTokenStreamSink } from '../src/index.js';
-import type { RedisStreamClient } from '../src/index.js';
+import type { RedisStreamClient, StreamFrame } from '../src/index.js';
 
 /**
  * An in-memory stand-in for a Redis server (NOT a client) shared across sink instances — modelling the
@@ -52,21 +52,20 @@ class FakeRedisServer {
   }
 }
 
-function encode(text: string): Uint8Array {
-  return new TextEncoder().encode(text);
+function text(v: string): StreamFrame {
+  return { t: 'text', v };
 }
 
-async function collect(iterable: AsyncIterable<Uint8Array>): Promise<Uint8Array[]> {
-  const out: Uint8Array[] = [];
-  for await (const chunk of iterable) {
-    out.push(chunk);
+async function collect(iterable: AsyncIterable<StreamFrame>): Promise<StreamFrame[]> {
+  const out: StreamFrame[] = [];
+  for await (const frame of iterable) {
+    out.push(frame);
   }
   return out;
 }
 
-function decodeAll(chunks: Uint8Array[]): string {
-  const decoder = new TextDecoder();
-  return chunks.map((c) => decoder.decode(c)).join('');
+function textOf(frames: StreamFrame[]): string {
+  return frames.map((frame) => (frame.t === 'text' ? frame.v : '')).join('');
 }
 
 describe('RedisTokenStreamSink', () => {
@@ -78,65 +77,65 @@ describe('RedisTokenStreamSink', () => {
     // Replica B serves the SSE (subscribes first), replica A runs the model.
     const collected = collect(replicaB.subscribe('run-x'));
     const writer = replicaA.open('run-x');
-    await writer.write(encode('Hel'));
-    await writer.write(encode('lo, '));
-    await writer.write(encode('world'));
+    await writer.write(text('Hel'));
+    await writer.write(text('lo, '));
+    await writer.write(text('world'));
     await writer.end();
 
-    const chunks = await collected;
-    expect(decodeAll(chunks)).toBe('Hello, world');
-    // Frame boundaries are preserved 1:1 (each write → one yielded chunk → one SSE `data:` frame).
-    expect(chunks.map((c) => new TextDecoder().decode(c))).toEqual(['Hel', 'lo, ', 'world']);
+    const frames = await collected;
+    expect(textOf(frames)).toBe('Hello, world');
+    // Frame boundaries are preserved 1:1 (each write → one yielded frame → one SSE `data:` frame).
+    expect(frames).toEqual([text('Hel'), text('lo, '), text('world')]);
   });
 
   it('replays buffered chunks for a late subscriber that connects after the run ended', async () => {
     const server = new FakeRedisServer();
     const writerSink = new RedisTokenStreamSink(server.client());
     const writer = writerSink.open('run-late');
-    await writer.write(encode('a'));
-    await writer.write(encode('b'));
+    await writer.write(text('a'));
+    await writer.write(text('b'));
     await writer.end();
 
     const readerSink = new RedisTokenStreamSink(server.client());
-    expect(decodeAll(await collect(readerSink.subscribe('run-late')))).toBe('ab');
+    expect(textOf(await collect(readerSink.subscribe('run-late')))).toBe('ab');
   });
 
-  it('produces a chunk stream byte-identical to the in-process sink (unchanged SSE envelope)', async () => {
-    const frames = ['The ', 'quick ', 'brown ', 'fox'];
-
+  it('produces a frame stream identical to the in-process sink (unchanged SSE envelope, now typed frames)', async () => {
     const inProcess = new InProcessTokenStreamSink();
-    const inWriter = inProcess.open('run-eq');
-    for (const f of frames) inWriter.write(encode(f));
-    inWriter.end();
-    const inChunks = await collect(inProcess.subscribe('run-eq'));
+    const wIn = inProcess.open('run-eq');
+    await wIn.write({ t: 'text', v: 'a' });
+    await wIn.write({ t: 'component', name: 'x', data: { n: 1 } });
+    wIn.end();
+    const inFrames = await collect(inProcess.subscribe('run-eq'));
 
     const server = new FakeRedisServer();
     const redis = new RedisTokenStreamSink(server.client());
-    const reWriter = redis.open('run-eq');
-    for (const f of frames) await reWriter.write(encode(f));
-    await reWriter.end();
-    const reChunks = await collect(redis.subscribe('run-eq'));
+    const wRe = redis.open('run-eq');
+    await wRe.write({ t: 'text', v: 'a' });
+    await wRe.write({ t: 'component', name: 'x', data: { n: 1 } });
+    await wRe.end();
+    const reFrames = await collect(redis.subscribe('run-eq'));
 
-    // Same number of frames, same bytes per frame → identical `data: {"delta":...}` SSE output.
-    expect(reChunks.map((c) => [...c])).toEqual(inChunks.map((c) => [...c]));
+    // Same frames, same order → identical `data: {"delta":...}` / component SSE output.
+    expect(reFrames).toEqual(inFrames);
   });
 
   it('ends the subscriber stream when the writer ends (no hang)', async () => {
     const server = new FakeRedisServer();
     const sink = new RedisTokenStreamSink(server.client());
     const writer = sink.open('run-end');
-    await writer.write(encode('x'));
+    await writer.write(text('x'));
     await writer.end();
 
     // If `end()` did not terminate the stream, this `for await` would never resolve.
-    expect(decodeAll(await collect(sink.subscribe('run-end')))).toBe('x');
+    expect(textOf(await collect(sink.subscribe('run-end')))).toBe('x');
   });
 
   it('close() drops the run buffer and terminal marker so the shared keys are cleaned up', async () => {
     const server = new FakeRedisServer();
     const sink = new RedisTokenStreamSink(server.client());
     const writer = sink.open('run-close');
-    await writer.write(encode('gone'));
+    await writer.write(text('gone'));
     await writer.end();
     expect(server.lists.size).toBeGreaterThan(0);
     expect(server.values.size).toBeGreaterThan(0);
@@ -152,7 +151,7 @@ describe('RedisTokenStreamSink', () => {
     // A subscriber registers the pub/sub channel; the writer creates the list + state keys.
     const collected = collect(sink.subscribe('run-1'));
     const writer = sink.open('run-1');
-    await writer.write(encode('hi'));
+    await writer.write(text('hi'));
     await writer.end();
     await collected;
 

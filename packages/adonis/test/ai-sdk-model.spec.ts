@@ -1,7 +1,7 @@
 import type { StandardJSONSchemaV1, StandardSchemaV1 } from '@standard-schema/spec';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { aiSdkModel } from '../src/ai-sdk/ai-sdk-model.js';
-import type { ModelMessage, SinkWriter, ToolDefinition } from '../src/index.js';
+import type { ModelMessage, SinkWriter, StreamFrame, ToolDefinition } from '../src/index.js';
 
 const { streamTextMock } = vi.hoisted(() => ({ streamTextMock: vi.fn() }));
 
@@ -18,11 +18,10 @@ interface CollectingSink extends SinkWriter {
 }
 
 function createSink(): CollectingSink {
-  const decoder = new TextDecoder();
   let written = '';
   return {
-    write(chunk: Uint8Array) {
-      written += decoder.decode(chunk);
+    write(frame: StreamFrame) {
+      if (frame.t === 'text') written += frame.v;
     },
     end() {},
     get written() {

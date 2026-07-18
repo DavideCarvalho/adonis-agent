@@ -30,7 +30,7 @@ function capturingModel(seen: string[][]): ModelProvider {
   return {
     async runTurn(args: ModelTurnArgs) {
       seen.push(args.tools.map((tool) => tool.name));
-      await args.sink.write(new TextEncoder().encode('ok'));
+      await args.sink.write({ t: 'text', v: 'ok' });
       return { text: 'ok', toolCalls: [], usage: { inputTokens: 1, outputTokens: 1 } };
     },
   };

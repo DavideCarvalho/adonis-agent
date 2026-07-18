@@ -1,5 +1,5 @@
 import type { RedisStreamClient } from './redis-stream-client.js';
-import type { SinkWriter, TokenStreamSink } from './spi/token-stream-sink.js';
+import type { SinkWriter, StreamFrame, TokenStreamSink } from './spi/token-stream-sink.js';
 
 /** Marker stored at the state key once a run's stream has finished. */
 const ENDED = 'ended';
@@ -19,8 +19,9 @@ export interface RedisTokenStreamSinkOptions {
  * (`${keyPrefix}:${runId}:state`), so an SSE handler on ANOTHER replica that subscribes after the run
  * finished still sees the ending and closes the stream.
  *
- * The yielded chunks are byte-identical to the in-process sink's, so the SSE envelope the provider
- * pipes (`data: {"delta":...}`) is unchanged — swapping this in is transparent to clients.
+ * The yielded frames are identical (frame-for-frame) to the in-process sink's, so the SSE envelope
+ * the provider pipes (`data: {"delta":...}` for text, a component event for `{ t: 'component' }`)
+ * is unchanged — swapping this in is transparent to clients.
  *
  * The host supplies a {@link RedisStreamClient} adapter over its own Redis driver; `subscribe` needs a
  * connection in subscriber mode (see the client docs). Wire it with `defineConfig({ sink:
@@ -50,8 +51,8 @@ export class RedisTokenStreamSink implements TokenStreamSink {
 
   open(runId: string): SinkWriter {
     return {
-      write: async (chunk: Uint8Array) => {
-        await this.client.rpush(this.chunksKey(runId), toBase64(chunk));
+      write: async (frame: StreamFrame) => {
+        await this.client.rpush(this.chunksKey(runId), JSON.stringify(frame));
         await this.client.publish(this.channel(runId), 'chunk');
       },
       end: async () => {
@@ -61,7 +62,7 @@ export class RedisTokenStreamSink implements TokenStreamSink {
     };
   }
 
-  async *subscribe(runId: string): AsyncIterable<Uint8Array> {
+  async *subscribe(runId: string): AsyncIterable<StreamFrame> {
     // Notify bridge: the pub/sub handler resolves the current `wake` promise so the drain loop
     // re-reads the list. A promise is armed BEFORE each drain, so a publish arriving mid-drain is
     // never lost.
@@ -81,7 +82,7 @@ export class RedisTokenStreamSink implements TokenStreamSink {
         const chunks = await this.client.lrange(this.chunksKey(runId), index, -1);
         for (const encoded of chunks) {
           index += 1;
-          yield fromBase64(encoded);
+          yield JSON.parse(encoded) as StreamFrame;
         }
         if (await this.hasEnded(runId)) {
           return;
@@ -101,12 +102,4 @@ export class RedisTokenStreamSink implements TokenStreamSink {
     const raw = await this.client.get(this.stateKey(runId));
     return raw === ENDED;
   }
-}
-
-function toBase64(chunk: Uint8Array): string {
-  return Buffer.from(chunk).toString('base64');
-}
-
-function fromBase64(encoded: string): Uint8Array {
-  return new Uint8Array(Buffer.from(encoded, 'base64'));
 }

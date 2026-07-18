@@ -55,10 +55,9 @@ function buildRegistry(): ToolRegistry {
 }
 
 async function drain(sink: InMemoryTokenStreamSink, runId: string): Promise<string> {
-  const decoder = new TextDecoder();
   let out = '';
-  for await (const chunk of sink.subscribe(runId)) {
-    out += decoder.decode(chunk);
+  for await (const frame of sink.subscribe(runId)) {
+    if (frame.t === 'text') out += frame.v;
   }
   return out;
 }
@@ -177,7 +176,7 @@ describe('runAgentLoop', () => {
   it('records the provider-reported modelId over the configured fallback', async () => {
     const reportingModel: ModelProvider = {
       async runTurn(args) {
-        await args.sink.write(new TextEncoder().encode('done'));
+        await args.sink.write({ t: 'text', v: 'done' });
         return {
           text: 'done',
           toolCalls: [],
@@ -195,7 +194,7 @@ describe('runAgentLoop', () => {
   it('persists a provider-reported costUsd onto the usage row', async () => {
     const gatewayModel: ModelProvider = {
       async runTurn(args) {
-        await args.sink.write(new TextEncoder().encode('done'));
+        await args.sink.write({ t: 'text', v: 'done' });
         return {
           text: 'done',
           toolCalls: [],

@@ -60,8 +60,9 @@ describe('run tracking — inline runner (Lucid)', () => {
   }
 
   async function collect(service: AgentService, runId: string): Promise<void> {
-    const decoder = new TextDecoder();
-    for await (const chunk of service.subscribe(runId)) decoder.decode(chunk);
+    for await (const _frame of service.subscribe(runId)) {
+      /* drain to completion */
+    }
   }
 
   beforeEach(async () => {
@@ -189,8 +190,9 @@ describe('run tracking — durable runner (replay-safe)', () => {
   }
 
   async function collect(runId: string): Promise<void> {
-    const decoder = new TextDecoder();
-    for await (const chunk of service.subscribe(runId)) decoder.decode(chunk);
+    for await (const _frame of service.subscribe(runId)) {
+      /* drain to completion */
+    }
   }
 
   afterEach(() => setDurableAgentContext(undefined));

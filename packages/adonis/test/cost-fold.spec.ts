@@ -93,7 +93,7 @@ describe('agent-loop cost fold', () => {
     });
     const gatewayModel: ModelProvider = {
       async runTurn(args) {
-        await args.sink.write(new TextEncoder().encode('done'));
+        await args.sink.write({ t: 'text', v: 'done' });
         return {
           text: 'done',
           toolCalls: [],

@@ -70,13 +70,11 @@ export function aiSdkModel(model: LanguageModel, opts?: AiSdkModelOptions): Mode
         ...(args.abortSignal ? { abortSignal: args.abortSignal } : {}),
       });
 
-      // Encode deltas to bytes for the live token sink, exactly as the reference fake provider does.
-      const encoder = new TextEncoder();
       let text = '';
       for await (const part of result.stream) {
         if (part.type === 'text-delta') {
           text += part.text;
-          await args.sink.write(encoder.encode(part.text));
+          await args.sink.write({ t: 'text', v: part.text });
         }
       }
 

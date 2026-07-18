@@ -45,7 +45,7 @@ export class InlineAgentRunner implements AgentRunner {
       await this.store.recordRunEnd({ runId, status: 'failed', error: message });
       // Surface the failure on the live stream and close it, so a subscriber isn't left hanging.
       const writer = await deps.sink.open(runId);
-      await writer.write(new TextEncoder().encode(`\n[error] ${message}`));
+      await writer.write({ t: 'text', v: `\n[error] ${message}` });
       await writer.end();
     });
 

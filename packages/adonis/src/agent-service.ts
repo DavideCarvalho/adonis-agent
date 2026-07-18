@@ -2,6 +2,7 @@ import type { AgentDepsFactory } from './agent-deps-factory.js';
 import { utcDay } from './agent-deps.js';
 import type { AgentRunner } from './spi/agent-runner.js';
 import type { AgentStore } from './spi/agent-store.js';
+import type { StreamFrame } from './spi/token-stream-sink.js';
 import type {
   Actor,
   AgentRunInput,
@@ -67,7 +68,7 @@ export class AgentService {
     return { runId, threadId };
   }
 
-  subscribe(runId: string): AsyncIterable<Uint8Array> {
+  subscribe(runId: string): AsyncIterable<StreamFrame> {
     return this.deps.forAgent().sink.subscribe(runId);
   }
 

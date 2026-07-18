@@ -141,7 +141,7 @@ export class AgentRunWorkflow extends BaseWorkflow {
       );
       if (!isChild) {
         const writer = await deps.sink.open(ctx.runId);
-        await writer.write(new TextEncoder().encode(`\n[error] ${message}`));
+        await writer.write({ t: 'text', v: `\n[error] ${message}` });
         await writer.end();
       }
       throw error;

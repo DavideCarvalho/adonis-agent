@@ -117,9 +117,8 @@ describe('run-tracing spans', () => {
     try {
       const service = buildService(dbHandle, twoStepScript);
       const { runId } = await service.chat({ actor, message: 'weather in Recife?' });
-      const decoder = new TextDecoder();
-      for await (const chunk of service.subscribe(runId)) {
-        void decoder.decode(chunk);
+      for await (const _frame of service.subscribe(runId)) {
+        /* drain to completion */
       }
       // The root span's asyncEnd fires after the loop resolves (just after the stream closes), so wait
       // for the whole trace to settle before asserting.
@@ -183,9 +182,8 @@ describe('run-tracing spans', () => {
     // from a run that finished before it subscribed.
     const service = buildService(dbHandle, twoStepScript);
     const { runId } = await service.chat({ actor, message: 'weather?' });
-    const decoder = new TextDecoder();
-    for await (const chunk of service.subscribe(runId)) {
-      void decoder.decode(chunk);
+    for await (const _frame of service.subscribe(runId)) {
+      /* drain to completion */
     }
     const late = captureSpans();
     try {

@@ -767,10 +767,15 @@ export default class AgentProvider {
   }
 
   /**
-   * Pipe the run's live token stream to the client as SSE, reproducing the envelope byte-for-byte:
-   * `event: meta` (runId/threadId) → `data: {"delta":...}` per chunk → `event: done`. Sets the
-   * `X-Agent-Run-Id` / `X-Agent-Thread-Id` headers. Writes the raw Node response directly (Adonis has
-   * no SSE helper) and ends only on stream completion — the sink closes on run finish, not on suspend.
+   * Pipe the run's live token stream to the client as SSE, reproducing the envelope byte-for-byte for
+   * text frames: `event: meta` (runId/threadId) → `data: {"delta":...}` per text frame → `event: done`.
+   * Sets the `X-Agent-Run-Id` / `X-Agent-Thread-Id` headers. Writes the raw Node response directly
+   * (Adonis has no SSE helper) and ends only on stream completion — the sink closes on run finish, not
+   * on suspend.
+   *
+   * The sink now carries typed `StreamFrame`s (`{ t: 'text' }` | `{ t: 'component' }`); only text
+   * frames are wired to the wire format here, unchanged from the byte-sink era. Serialising component
+   * frames to SSE is a later task's concern.
    */
   async #pipe(
     ctx: HttpContext,
@@ -789,9 +794,10 @@ export default class AgentProvider {
     };
     raw.writeHead(200, headers);
     raw.write(`event: meta\ndata: ${JSON.stringify({ runId, threadId })}\n\n`);
-    const decoder = new TextDecoder();
-    for await (const chunk of service.subscribe(runId)) {
-      raw.write(`data: ${JSON.stringify({ delta: decoder.decode(chunk) })}\n\n`);
+    for await (const frame of service.subscribe(runId)) {
+      if (frame.t === 'text') {
+        raw.write(`data: ${JSON.stringify({ delta: frame.v })}\n\n`);
+      }
     }
     raw.write('event: done\ndata: {}\n\n');
     raw.end();

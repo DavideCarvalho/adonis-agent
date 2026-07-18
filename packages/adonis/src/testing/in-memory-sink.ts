@@ -1,13 +1,13 @@
-import type { SinkWriter, TokenStreamSink } from '../index.js';
+import type { SinkWriter, StreamFrame, TokenStreamSink } from '../index.js';
 
 interface RunBuffer {
-  chunks: Uint8Array[];
+  chunks: StreamFrame[];
   ended: boolean;
   notify: Set<() => void>;
 }
 
 /**
- * In-memory `TokenStreamSink`. Buffers chunks per run so a late subscriber (reconnect)
+ * In-memory `TokenStreamSink`. Buffers typed frames per run so a late subscriber (reconnect)
  * replays everything emitted so far, then follows live until the run ends.
  */
 export class InMemoryTokenStreamSink implements TokenStreamSink {
@@ -32,8 +32,8 @@ export class InMemoryTokenStreamSink implements TokenStreamSink {
   open(runId: string): SinkWriter {
     const buf = this.buffer(runId);
     return {
-      write: (chunk: Uint8Array) => {
-        buf.chunks.push(chunk);
+      write: (frame: StreamFrame) => {
+        buf.chunks.push(frame);
         this.wake(buf);
       },
       end: () => {
@@ -43,7 +43,7 @@ export class InMemoryTokenStreamSink implements TokenStreamSink {
     };
   }
 
-  async *subscribe(runId: string): AsyncIterable<Uint8Array> {
+  async *subscribe(runId: string): AsyncIterable<StreamFrame> {
     const buf = this.buffer(runId);
     let index = 0;
     while (true) {
