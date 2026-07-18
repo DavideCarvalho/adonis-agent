@@ -55,6 +55,30 @@ class GetTimeTool implements ToolHandler<Record<string, never>> {
   }
 }
 
+// A tool with a constructor dependency — only resolvable through the IoC container, never `new X()`.
+class NeedsDep implements ToolHandler<Record<string, never>> {
+  static tool = {
+    name: 'needsDep',
+    kind: 'read',
+    description: 'Depends on an injected service',
+    input: z.object({}),
+  } as const;
+
+  constructor(private dep: { value: () => string }) {}
+
+  async execute(_input: Record<string, never>, _ctx: AiToolCtx) {
+    return { got: this.dep.value() };
+  }
+}
+
+const allowAll = { can: async () => true };
+const anyCtx = {
+  actor: { id: 'u', roles: ['ADMIN'] },
+  threadId: 't',
+  runId: 'r',
+  requestId: 'q',
+} as unknown as AiToolCtx;
+
 describe('tool discovery', () => {
   it('reads @AiTool metadata off a decorated class', () => {
     const meta = readAiToolMeta(GetWeatherTool);
@@ -142,5 +166,40 @@ describe('tool discovery', () => {
     const registry = new ToolRegistry();
     expect(registerToolExport(registry, GetWeatherTool, ['ADMIN'])).not.toBeNull();
     expect(registerToolExport(registry, GetWeatherTool, ['ADMIN'])).toBeNull();
+  });
+
+  it('resolves a class tool through the container (@inject) — lazily and cached — when an app is given', async () => {
+    const registry = new ToolRegistry();
+    let makeCalls = 0;
+    const dep = { value: () => 'injected' };
+    const fakeApp = {
+      container: {
+        make: async (cls: unknown) => {
+          makeCalls++;
+          return new (cls as new (d: typeof dep) => ToolHandler)(dep);
+        },
+      },
+    };
+
+    const result = registerToolExport(registry, NeedsDep, ['ADMIN'], fakeApp as never);
+    expect(result).not.toBeNull();
+    // Lazy: registration must NOT touch the container (boot runs before the app is fully booted).
+    expect(makeCalls).toBe(0);
+
+    const out = await registry.invoke('needsDep', {}, anyCtx, allowAll as never);
+    // The dep came from the container — a `new NeedsDep()` would have no `dep` and throw.
+    expect(out).toEqual({ got: 'injected' });
+    expect(makeCalls).toBe(1);
+
+    // Cached: a second invocation reuses the resolved instance, no re-resolution.
+    await registry.invoke('needsDep', {}, anyCtx, allowAll as never);
+    expect(makeCalls).toBe(1);
+  });
+
+  it('without an app, still instantiates a no-arg class tool with `new` (pre-DI behavior)', async () => {
+    const registry = new ToolRegistry();
+    expect(registerToolExport(registry, GetTimeTool, ['ADMIN'])).not.toBeNull();
+    const out = await registry.invoke('getTime', {}, anyCtx, allowAll as never);
+    expect(out).toEqual({ iso: '2020-01-01T00:00:00Z' });
   });
 });

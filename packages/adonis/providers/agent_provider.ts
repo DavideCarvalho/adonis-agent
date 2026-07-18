@@ -117,9 +117,9 @@ export default class AgentProvider {
     // ── Tool discovery: generated barrel first, else the app/agent_tools readdir fallback ──
     const barrel = await this.#loadGeneratedToolsBarrel();
     if (barrel) {
-      await registerToolsFromBarrel(registry, barrel, defaultRoles);
+      await registerToolsFromBarrel(registry, barrel, defaultRoles, this.app);
     } else {
-      await discoverTools(registry, this.app.makePath('app/agent_tools'), defaultRoles);
+      await discoverTools(registry, this.app.makePath('app/agent_tools'), defaultRoles, this.app);
     }
     // Config-level functional tools (defineTool), then synthesized delegate tools.
     for (const tool of config.tools ?? []) {

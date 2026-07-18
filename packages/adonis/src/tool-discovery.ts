@@ -1,6 +1,7 @@
 import { readdir } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import type { ApplicationService } from '@adonisjs/core/types';
 import {
   type AiToolMeta,
   type FunctionalTool,
@@ -27,26 +28,50 @@ export function registerToolExport(
   registry: ToolRegistry,
   exported: unknown,
   defaultRoles: string[],
+  app?: ApplicationService,
 ): RegisteredTool | null {
   // A functional tool: a branded { spec, handler } from `defineTool`.
   if (isBrandedFunctionalTool(exported)) {
     return registerFunctionalTool(registry, exported, defaultRoles);
   }
-  // An `@AiTool` class: read its stamped metadata, instantiate once, bind `execute`.
+  // An `@AiTool` / `static tool` class: read its stamped metadata and register `execute`.
   const meta = readAiToolMeta(exported);
   if (meta === undefined || typeof exported !== 'function') {
     return null;
   }
-  const instance = instantiate(exported as ToolClass);
-  if (instance === null || typeof instance.execute !== 'function') {
+  const cls = exported as ToolClass;
+  // Validate it is a tool WITHOUT constructing it — `execute` lives on the prototype. Keeps the
+  // fail-fast reject of a non-tool export while letting the instance be resolved lazily (app path).
+  const proto = cls.prototype as { execute?: unknown } | undefined;
+  if (typeof proto?.execute !== 'function') {
     return null;
   }
   if (registry.has(meta.name)) {
     return null;
   }
-  registry.register(specFromMeta(meta, defaultRoles), {
-    execute: (input, ctx) => instance.execute(input, ctx),
-  });
+
+  if (app === undefined) {
+    // No container: instantiate now (no DI); skip if construction throws — pre-DI behavior.
+    const instance = instantiate(cls);
+    if (instance === null) {
+      return null;
+    }
+    registry.register(specFromMeta(meta, defaultRoles), {
+      execute: (input, ctx) => instance.execute(input, ctx),
+    });
+  } else {
+    // Container DI: resolve the tool (and its `@inject`'d deps) through the IoC container — the
+    // idiomatic Adonis way. LAZY on first use and then cached: discovery runs in the provider's
+    // `boot()`, before the app is fully booted, so an eager `container.make()` could fail resolving
+    // a peer service — the same reason the Lucid store factory resolves lazily.
+    let instancePromise: Promise<ToolHandler> | undefined;
+    registry.register(specFromMeta(meta, defaultRoles), {
+      execute: (input, ctx) => {
+        instancePromise ??= app.container.make(cls) as unknown as Promise<ToolHandler>;
+        return instancePromise.then((instance) => instance.execute(input, ctx));
+      },
+    });
+  }
   return { name: meta.name, source: 'class' };
 }
 
@@ -112,6 +137,7 @@ export async function discoverTools(
   registry: ToolRegistry,
   dir: string,
   defaultRoles: string[],
+  app?: ApplicationService,
 ): Promise<RegisteredTool[]> {
   let entries: string[];
   try {
@@ -135,7 +161,7 @@ export async function discoverTools(
         continue;
       }
       seen.add(exported);
-      const result = registerToolExport(registry, exported, defaultRoles);
+      const result = registerToolExport(registry, exported, defaultRoles, app);
       if (result !== null) {
         registered.push(result);
       }
@@ -159,6 +185,7 @@ export async function registerToolsFromBarrel(
   registry: ToolRegistry,
   barrel: ToolsBarrel,
   defaultRoles: string[],
+  app?: ApplicationService,
 ): Promise<RegisteredTool[]> {
   const registered: RegisteredTool[] = [];
   const seen = new Set<unknown>();
@@ -169,7 +196,7 @@ export async function registerToolsFromBarrel(
         continue;
       }
       seen.add(exported);
-      const result = registerToolExport(registry, exported, defaultRoles);
+      const result = registerToolExport(registry, exported, defaultRoles, app);
       if (result !== null) {
         registered.push(result);
       }
