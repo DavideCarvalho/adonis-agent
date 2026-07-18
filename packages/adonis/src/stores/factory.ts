@@ -612,7 +612,9 @@ async function buildAdonisRedisClient(
   app: ApplicationService,
   connection?: string,
 ): Promise<RedisStreamClient> {
-  const container = app.container as unknown as { make(binding: string): Promise<RedisManagerLike> };
+  const container = app.container as unknown as {
+    make(binding: string): Promise<RedisManagerLike>;
+  };
   const redis = await container.make('redis');
   const conn = connection !== undefined ? redis.connection(connection) : redis.connection();
   return adaptIoRedis(conn.ioConnection);

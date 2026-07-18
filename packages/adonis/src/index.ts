@@ -1,4 +1,4 @@
-export const VERSION = '0.13.1';
+export const VERSION = '0.13.2';
 
 export * from './types.js';
 export * from './spi/tool.js';
