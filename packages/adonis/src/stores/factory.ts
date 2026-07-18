@@ -506,7 +506,7 @@ export const attachmentStores = {
  * driver — inside the thunk, so nothing loads until the sink is actually selected. Assignable to the
  * `sink` field's `SinkFactory`.
  */
-export type TokenSinkFactory = () => TokenStreamSink | Promise<TokenStreamSink>;
+export type TokenSinkFactory = (ctx: StoreContext) => TokenStreamSink | Promise<TokenStreamSink>;
 
 /** Options for the Redis multi-replica token-stream sink. */
 export interface RedisTokenSinkConfig {
@@ -562,9 +562,9 @@ export const tokenSinks = {
    * passed.
    */
   redis(config: RedisTokenSinkConfig = {}): TokenSinkFactory {
-    return async () => {
+    return async (ctx) => {
       const { RedisTokenStreamSink } = await import('../redis-token-stream-sink.js');
-      const client = config.client ?? (await buildAdonisRedisClient(config.connection));
+      const client = config.client ?? (await buildAdonisRedisClient(ctx.app, config.connection));
       return new RedisTokenStreamSink(client, {
         ...(config.keyPrefix !== undefined ? { keyPrefix: config.keyPrefix } : {}),
         ...(config.ttlSeconds !== undefined ? { ttlSeconds: config.ttlSeconds } : {}),
@@ -599,15 +599,21 @@ interface RedisManagerLike {
 }
 
 /**
- * Lazily import `@adonisjs/redis` and adapt its connection to a {@link RedisStreamClient}. The specifier
- * is held in a variable so TypeScript does NOT resolve the (optional, possibly-uninstalled) module at
- * build time — it stays a runtime-only dependency. Uses a DEDICATED duplicated connection per subscribe
- * (a subscribed Redis connection can't run other commands).
+ * Resolve `@adonisjs/redis` from the app container (`app.container.make('redis')`) and adapt its
+ * connection to a {@link RedisStreamClient}. Uses the container — NOT `@adonisjs/redis/services/main` —
+ * because that service singleton reads its own module-level `app`, which is `undefined` when the sink is
+ * built during `AgentProvider.boot` (throws `Cannot read properties of undefined (reading 'booted')`).
+ * The `app` handed in here is the live application, so it resolves correctly. The container binding is
+ * only reached when the Redis sink is selected, so `@adonisjs/redis` stays a runtime-only peer (cast the
+ * container access since the peer's `redis` binding type may be absent at build time). Uses a DEDICATED
+ * duplicated connection per subscribe (a subscribed Redis connection can't run other commands).
  */
-async function buildAdonisRedisClient(connection?: string): Promise<RedisStreamClient> {
-  const specifier = '@adonisjs/redis/services/main' as string;
-  const mod = (await import(specifier)) as { default: RedisManagerLike };
-  const redis = mod.default;
+async function buildAdonisRedisClient(
+  app: ApplicationService,
+  connection?: string,
+): Promise<RedisStreamClient> {
+  const container = app.container as unknown as { make(binding: string): Promise<RedisManagerLike> };
+  const redis = await container.make('redis');
   const conn = connection !== undefined ? redis.connection(connection) : redis.connection();
   return adaptIoRedis(conn.ioConnection);
 }

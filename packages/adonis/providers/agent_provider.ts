@@ -214,7 +214,7 @@ export default class AgentProvider {
   async #resolveSink(config: AgentConfig): Promise<TokenStreamSink> {
     const sink = config.sink;
     if (sink === undefined) return new InProcessTokenStreamSink();
-    return typeof sink === 'function' ? sink() : sink;
+    return typeof sink === 'function' ? sink({ app: this.app }) : sink;
   }
 
   /**

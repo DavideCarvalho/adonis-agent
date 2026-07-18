@@ -52,8 +52,8 @@ import type { AgentDefinition } from './types.js';
 
 /** A lazy factory thunk, so the peer (`ai`/a provider SDK) is imported only when the config loads. */
 export type ModelFactory = () => ModelProvider | Promise<ModelProvider>;
-/** A lazy {@link TokenStreamSink} factory. Omit to use the in-process sink. */
-export type SinkFactory = () => TokenStreamSink | Promise<TokenStreamSink>;
+/** A lazy {@link TokenStreamSink} factory, receiving the app context (for container access). Omit to use the in-process sink. */
+export type SinkFactory = (ctx: StoreContext) => TokenStreamSink | Promise<TokenStreamSink>;
 
 /** The implicit default agent, configured inline — an {@link AgentDefinition} with `name` optional. */
 export type DefaultAgentOptions = Omit<AgentDefinition, 'name'> & { name?: string };
