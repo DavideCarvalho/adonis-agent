@@ -31,6 +31,7 @@ import {
   discoverTools,
   evaluateGovernanceGate,
   evaluateOwnership,
+  frameToSse,
   governanceQueries as governanceQueriesFactories,
   lucidStoreConnection,
   pricingStores,
@@ -773,9 +774,9 @@ export default class AgentProvider {
    * (Adonis has no SSE helper) and ends only on stream completion — the sink closes on run finish, not
    * on suspend.
    *
-   * The sink now carries typed `StreamFrame`s (`{ t: 'text' }` | `{ t: 'component' }`); only text
-   * frames are wired to the wire format here, unchanged from the byte-sink era. Serialising component
-   * frames to SSE is a later task's concern.
+   * The sink carries typed `StreamFrame`s (`{ t: 'text' }` | `{ t: 'component' }`); `frameToSse`
+   * serializes each frame to its wire envelope — text stays the byte-identical legacy
+   * `data: {"delta":...}` frame, components become `event: component\ndata: {name,data}`.
    */
   async #pipe(
     ctx: HttpContext,
@@ -795,9 +796,7 @@ export default class AgentProvider {
     raw.writeHead(200, headers);
     raw.write(`event: meta\ndata: ${JSON.stringify({ runId, threadId })}\n\n`);
     for await (const frame of service.subscribe(runId)) {
-      if (frame.t === 'text') {
-        raw.write(`data: ${JSON.stringify({ delta: frame.v })}\n\n`);
-      }
+      raw.write(frameToSse(frame));
     }
     raw.write('event: done\ndata: {}\n\n');
     raw.end();

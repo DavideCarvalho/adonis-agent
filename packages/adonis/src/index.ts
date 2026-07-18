@@ -46,6 +46,7 @@ export type {
   InvokeWithTransientRetryOptions,
 } from './tool-retry.js';
 export * from './diagnostics.js';
+export { frameToSse } from './sse.js';
 
 // ── Wave 2: Adonis integration shell ─────────────────────────────────────────
 export {
