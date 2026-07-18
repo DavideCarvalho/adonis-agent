@@ -4,9 +4,20 @@ import type { SinkWriter, StreamFrame, TokenStreamSink } from './spi/token-strea
 /** Marker stored at the state key once a run's stream has finished. */
 const ENDED = 'ended';
 
+/** Default TTL (seconds) for a run's Redis keys: 1h — a generous reconnect/replay window past finish. */
+const DEFAULT_TTL_SECONDS = 3600;
+
 export interface RedisTokenStreamSinkOptions {
   /** Key/channel namespace. Defaults to `agent:stream`. Keys are `${keyPrefix}:${runId}:...`. */
   keyPrefix?: string;
+  /**
+   * TTL (seconds) applied to a run's `chunks`/`state` keys so they self-expire — the framework never
+   * calls {@link RedisTokenStreamSink.close}, so without this the replay buffer would accumulate in
+   * Redis forever. The TTL is a sliding window refreshed on every write, so a long run stays alive and
+   * a crashed run (that never `end`s) still expires. Defaults to 3600 (1h). Set `0` to disable and
+   * retain keys until `close()`/manual cleanup (the pre-TTL behaviour).
+   */
+  ttlSeconds?: number;
 }
 
 /**
@@ -29,12 +40,21 @@ export interface RedisTokenStreamSinkOptions {
  */
 export class RedisTokenStreamSink implements TokenStreamSink {
   private readonly keyPrefix: string;
+  private readonly ttlSeconds: number;
 
   constructor(
     private readonly client: RedisStreamClient,
     options: RedisTokenStreamSinkOptions = {},
   ) {
     this.keyPrefix = options.keyPrefix ?? 'agent:stream';
+    this.ttlSeconds = options.ttlSeconds ?? DEFAULT_TTL_SECONDS;
+  }
+
+  /** Refresh the sliding TTL on `key` (no-op when TTL is disabled or the client can't `expire`). */
+  private async touchTtl(key: string): Promise<void> {
+    if (this.ttlSeconds > 0) {
+      await this.client.expire?.(key, this.ttlSeconds);
+    }
   }
 
   private chunksKey(runId: string): string {
@@ -53,10 +73,13 @@ export class RedisTokenStreamSink implements TokenStreamSink {
     return {
       write: async (frame: StreamFrame) => {
         await this.client.rpush(this.chunksKey(runId), JSON.stringify(frame));
+        await this.touchTtl(this.chunksKey(runId));
         await this.client.publish(this.channel(runId), 'chunk');
       },
       end: async () => {
         await this.client.set(this.stateKey(runId), ENDED);
+        await this.touchTtl(this.stateKey(runId));
+        await this.touchTtl(this.chunksKey(runId));
         await this.client.publish(this.channel(runId), 'end');
       },
     };

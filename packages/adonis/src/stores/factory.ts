@@ -515,6 +515,12 @@ export interface RedisTokenSinkConfig {
   /** Key/channel namespace. Defaults to `agent:stream`. */
   keyPrefix?: string;
   /**
+   * TTL (seconds) for a run's replay keys so they self-expire — the framework never calls the sink's
+   * `close()`, so without a TTL the buffer would accumulate in Redis forever. Sliding window refreshed
+   * on every write. Defaults to 3600 (1h). Set `0` to disable (retain until manual cleanup).
+   */
+  ttlSeconds?: number;
+  /**
    * Bring-your-own {@link RedisStreamClient} adapter (over `ioredis`, `node-redis`, ...). When set, the
    * `@adonisjs/redis` peer is NOT imported — the factory uses this client directly. Handy for tests and
    * non-Adonis Redis drivers.
@@ -561,6 +567,7 @@ export const tokenSinks = {
       const client = config.client ?? (await buildAdonisRedisClient(config.connection));
       return new RedisTokenStreamSink(client, {
         ...(config.keyPrefix !== undefined ? { keyPrefix: config.keyPrefix } : {}),
+        ...(config.ttlSeconds !== undefined ? { ttlSeconds: config.ttlSeconds } : {}),
       });
     };
   },
@@ -577,6 +584,7 @@ interface IoRedisLike {
   get(key: string): Promise<string | null>;
   publish(channel: string, message: string): Promise<number>;
   del(...keys: string[]): Promise<number>;
+  expire(key: string, seconds: number): Promise<number>;
   duplicate(): IoRedisLike;
   subscribe(channel: string): Promise<unknown>;
   unsubscribe(channel: string): Promise<unknown>;
@@ -635,6 +643,9 @@ function adaptIoRedis(io: IoRedisLike): RedisStreamClient {
     },
     del: async (...keys) => {
       await io.del(...keys);
+    },
+    expire: async (key, seconds) => {
+      await io.expire(key, seconds);
     },
   };
 }

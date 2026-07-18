@@ -25,4 +25,10 @@ export interface RedisStreamClient {
   subscribe(channel: string, onMessage: (message: string) => void): Promise<() => Promise<void>>;
   /** Delete the given keys (DEL). */
   del(...keys: string[]): Promise<void>;
+  /**
+   * Set a TTL of `seconds` on `key` so it self-expires (EXPIRE). Optional: a bring-your-own client that
+   * omits it keeps the sink working, the run's keys just retain until `close()` or manual cleanup. The
+   * `@adonisjs/redis` adapter always provides it, so the default Redis sink bounds every run's keys.
+   */
+  expire?(key: string, seconds: number): Promise<void>;
 }

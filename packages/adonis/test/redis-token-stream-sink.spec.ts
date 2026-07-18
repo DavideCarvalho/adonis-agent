@@ -12,6 +12,8 @@ class FakeRedisServer {
   readonly lists = new Map<string, string[]>();
   readonly values = new Map<string, string>();
   readonly subs = new Map<string, Set<(message: string) => void>>();
+  /** Last TTL (seconds) set per key via EXPIRE — lets tests assert keys are bounded. */
+  readonly ttls = new Map<string, number>();
 
   client(): RedisStreamClient {
     return {
@@ -47,6 +49,9 @@ class FakeRedisServer {
           this.lists.delete(key);
           this.values.delete(key);
         }
+      },
+      expire: async (key, seconds) => {
+        this.ttls.set(key, seconds);
       },
     };
   }
@@ -143,6 +148,31 @@ describe('RedisTokenStreamSink', () => {
     await sink.close('run-close');
     expect(server.lists.size).toBe(0);
     expect(server.values.size).toBe(0);
+  });
+
+  it('sets a TTL on the chunks and state keys so they self-expire (no leak without close())', async () => {
+    const server = new FakeRedisServer();
+    const sink = new RedisTokenStreamSink(server.client(), { ttlSeconds: 120 });
+    const writer = sink.open('run-ttl');
+    await writer.write(text('x'));
+    await writer.end();
+
+    expect(server.ttls.get('agent:stream:run-ttl:chunks')).toBe(120);
+    expect(server.ttls.get('agent:stream:run-ttl:state')).toBe(120);
+  });
+
+  it('applies a 1h default TTL, and ttlSeconds: 0 disables expiry', async () => {
+    const server = new FakeRedisServer();
+    const wDefault = new RedisTokenStreamSink(server.client()).open('run-default');
+    await wDefault.write(text('a'));
+    await wDefault.end();
+    expect(server.ttls.get('agent:stream:run-default:chunks')).toBe(3600);
+
+    const off = new FakeRedisServer();
+    const wOff = new RedisTokenStreamSink(off.client(), { ttlSeconds: 0 }).open('run-off');
+    await wOff.write(text('a'));
+    await wOff.end();
+    expect(off.ttls.size).toBe(0);
   });
 
   it('honours a custom keyPrefix for its list, state and channel keys', async () => {
