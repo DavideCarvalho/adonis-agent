@@ -14,6 +14,12 @@ export interface AiToolCtx {
   pageContext?: PageContext;
   /** Optional host handle (e.g. an ORM EntityManager) the app threads through options. */
   host?: unknown;
+  /**
+   * Empurra um componente de UI pro stream do run, na posição atual (entre os
+   * tokens de texto já emitidos e os próximos). Opcional: só a montagem no
+   * agent-loop provê; outros construtores de ctx podem omitir.
+   */
+  emitComponent?(name: string, data: unknown): void | Promise<void>;
 }
 
 /**

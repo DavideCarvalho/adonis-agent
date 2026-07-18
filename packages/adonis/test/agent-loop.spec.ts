@@ -8,6 +8,7 @@ import {
   type ModelProvider,
   type Persona,
   type PromptBuilder,
+  type StreamFrame,
   ToolRegistry,
   runAgentLoop,
 } from '../src/index.js';
@@ -31,6 +32,20 @@ function buildRegistry(): ToolRegistry {
       inputSchema: z.object({ city: z.string() }),
     },
     { execute: async (input: { city: string }) => ({ tempC: 21, city: input.city }) },
+  );
+  reg.register(
+    {
+      name: 'show_card',
+      kind: 'read',
+      description: 'renders a card component',
+      inputSchema: z.object({}),
+    },
+    {
+      execute: async (_input, ctx) => {
+        await ctx.emitComponent?.('Card', { hello: 'world' });
+        return { shown: true };
+      },
+    },
   );
   reg.register(
     {
@@ -60,6 +75,12 @@ async function drain(sink: InMemoryTokenStreamSink, runId: string): Promise<stri
     if (frame.t === 'text') out += frame.v;
   }
   return out;
+}
+
+async function drainFrames(sink: InMemoryTokenStreamSink, runId: string): Promise<StreamFrame[]> {
+  const frames: StreamFrame[] = [];
+  for await (const f of sink.subscribe(runId)) frames.push(f);
+  return frames;
 }
 
 interface RunOverrides {
@@ -284,5 +305,47 @@ describe('runAgentLoop', () => {
     } finally {
       delete (globalThis as Record<symbol, unknown>)[EMIT_SLOT];
     }
+  });
+
+  it('emits a component frame from a tool, in order with text', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'olha ', toolCall: { name: 'show_card', input: {} } }
+        : { text: 'pronto' };
+
+    const store = new InMemoryAgentStore();
+    const sink = new InMemoryTokenStreamSink();
+    const runId = 'run-emit';
+    const thread = await store.createThread({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      persona: 'default',
+    });
+    const deps: AgentLoopDeps = {
+      model: new FakeModelProvider(script),
+      store,
+      registry: buildRegistry(),
+      rolesPolicy: new DefaultRolesPolicy(),
+      modelId: 'fake-1',
+      day: '2026-06-30',
+      systemPrompt: 'You are a test agent.',
+    };
+    const hooks: AgentLoopHooks = {
+      runId,
+      openSink: () => sink.open(runId),
+      awaitApproval: async () => ({ approved: true }),
+      step: (_name, fn) => fn(),
+    };
+    await runAgentLoop(
+      deps,
+      { threadId: thread.id, actor: { id: 'u1', roles: ['ADMIN'] }, userText: 'oi' },
+      hooks,
+    );
+
+    const frames = await drainFrames(sink, runId);
+    const kinds = frames.map((f) => (f.t === 'component' ? `component:${f.name}` : `text:${f.v}`));
+    expect(kinds).toContain('component:Card');
+    expect(kinds.indexOf('text:olha ')).toBeLessThan(kinds.indexOf('component:Card'));
+    const comp = frames.find((f) => f.t === 'component');
+    expect(comp).toMatchObject({ t: 'component', name: 'Card', data: { hello: 'world' } });
   });
 });

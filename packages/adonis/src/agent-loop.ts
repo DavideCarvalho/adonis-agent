@@ -428,6 +428,8 @@ export async function runAgentLoop(
         threadId: input.threadId,
         runId: hooks.runId,
         requestId: hooks.runId,
+        emitComponent: (name: string, data: unknown) =>
+          writer.write({ t: 'component', name, data }),
         ...(persona !== undefined ? { persona } : {}),
         ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
         ...(deps.host !== undefined ? { host: deps.host } : {}),
