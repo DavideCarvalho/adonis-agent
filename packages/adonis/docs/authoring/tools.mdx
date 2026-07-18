@@ -211,6 +211,8 @@ interface AiToolCtx {
 
 Identity is single-sourced on `ctx.actor` — read `ctx.actor.id` / `ctx.actor.tenantRef` and scope every query to it. Never trust an id the model passes in its arguments.
 
+The ctx also carries `emitComponent?(name, data)` — a tool can push a typed **UI component** into the run's stream instead of (or alongside) text, and the frontend renders your React component inline. See [Generative UI](/docs/agent/generative-ui).
+
 ## Constructor DI (`@inject`)
 
 Class tools — whether `@AiTool`-decorated or a `BaseTool`/`ReadTool`/`ActionTool` subclass — are resolved through the **AdonisJS IoC container**, so a tool declares its dependencies in its constructor and lets the container build them. This is the idiomatic Adonis way: no service locator, no manual `new`, and your handler stays testable.

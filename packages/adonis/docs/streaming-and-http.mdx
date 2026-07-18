@@ -57,6 +57,10 @@ data: {}
 - One **`data`** frame per streamed chunk, each `{"delta": "<text>"}`.
 - A terminating **`done`** frame when the run completes.
 
+<Callout type="info" title="Component frames (Generative UI)">
+A tool can also emit a typed UI component into the stream, which appears as a named `event: component` frame (`data: {"name":...,"data":...}`) interleaved with the text `delta`s. The text envelope above is unchanged — text-only clients ignore the extra event. See [Generative UI](/docs/agent/generative-ui).
+</Callout>
+
 The response also sets `X-Agent-Run-Id` and `X-Agent-Thread-Id` headers (plus `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no` so proxies don't buffer the stream). The stream ends only on run **completion** — the token sink stays open across a HITL suspend, so an approved-then-resumed run keeps one continuous stream.
 
 ## Human-in-the-loop
