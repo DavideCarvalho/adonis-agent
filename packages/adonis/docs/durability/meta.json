@@ -1,4 +1,7 @@
 {
   "title": "Durability",
-  "pages": ["durable-runner"]
+  "icon": "Infinity",
+  "pages": [
+    "durable-runner"
+  ]
 }

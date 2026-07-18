@@ -11,7 +11,7 @@ import { Cards, Card } from 'fumadocs-ui/components/card';
 **`@adonis-agora/agent`** adds an AI agent to your AdonisJS app: streaming chat, tool-calling, and multi-agent delegation — all behind a governance layer that is **fail-closed by default**. A tool a user's role can't reach is never even offered to the model; an `action` tool never runs without a human approving it; the caller's identity is never fabricated. You wire a model, declare a few tools, and get a governed `/agent/chat` endpoint that streams tokens over SSE.
 
 <Callout type="info" title="Alpha">
-  This package is published as `0.1.0`. The API documented here reflects the current shipped surface — grounded in the code, not a wishlist. Pin a version and expect refinements before `1.0`.
+  This package is published as `0.11.0`. Everything the initial `0.1.0` deferred — the durable runner, RAG (memory + pgvector), the governance read-model, the dashboard SPA, the Telescope tab, the `@adonis-agora/authz` (Bouncer) adapter, the governed SQL data satellite, multimodal attachments, and Redis streaming — has since shipped. The API documented here reflects the current shipped surface — grounded in the code, not a wishlist. Pin a version and expect refinements before `1.0`.
 </Callout>
 
 ## The problem it solves
@@ -106,8 +106,9 @@ The response is an SSE stream: an `event: meta` frame with the run and thread id
 
 ## What you get
 
-- **Streaming chat over SSE** — eleven `/agent` routes for chat, re-attach, cancel, threads, HITL approve/reject, and quota.
-- **Tool-calling with governance** — `@AiTool` classes or `defineTool` functions, discovered from `app/agent_tools`, gated by a fail-closed role/persona policy.
+- **Streaming chat over SSE** — the core `/agent` routes for chat, re-attach, cancel, threads, HITL approve/reject, and quota.
+- **Tool-calling with governance** — `@AiTool` classes, `defineTool` functions, or `BaseTool`/`ReadTool`/`ActionTool` base classes, discovered from `app/agent_tools` (resolved through the IoC container, so a tool can `@inject` its dependencies), gated by a fail-closed role/persona policy.
+- **Object-level ownership** — a caller may act only on the runs and threads it owns; a non-owner who guesses a `runId`/`threadId` gets `404`/`403`, unless it is governance-privileged (IDOR closed). See [Authorization](/docs/agent/governance/authorization#object-level-ownership).
 - **Human-in-the-loop** — `action` tools pause the run for an explicit approve/reject decision before they execute.
 - **Multi-agent delegation** — declare `delegatesTo` and an orchestrator gets synthesized `ask_<agent>` tools that hand work to other named agents.
 - **Cost & quota accounting** — a per-turn usage ledger, a daily token quota checked before the model runs, and a pricing table for cost estimates.
@@ -126,7 +127,7 @@ The response is an SSE stream: an `event: meta` frame with the run and thread id
   <Card title="RAG & retrieval" href="/docs/agent/retrieval/rag" description="Retriever/embedding/reranker SPIs, memory & pgvector stores, and always-on inject retrieval." />
   <Card title="Governance read-model" href="/docs/agent/governance/read-model" description="Spend, run lifecycle, tool stats, reliability, and the approvals inbox over /agent/governance/*." />
   <Card title="State store" href="/docs/agent/stores/lucid" description="The Lucid tables, the migration, and the in-memory store." />
-  <Card title="Streaming & HTTP" href="/docs/agent/streaming-and-http" description="The eleven routes, the SSE envelope, HITL, re-attach, and consuming from React." />
+  <Card title="Streaming & HTTP" href="/docs/agent/streaming-and-http" description="The routes, the SSE envelope, HITL, re-attach, and consuming from React." />
   <Card title="Testing" href="/docs/agent/testing" description="The FakeModelProvider, echoScript, and in-memory doubles." />
-  <Card title="Roadmap" href="/docs/agent/roadmap" description="What 0.1.0 defers — the durable runner, dashboards, the authz adapter, and more." />
+  <Card title="Roadmap" href="/docs/agent/roadmap" description="What has shipped since the 0.1.0 core — the durable runner, RAG, dashboards, the authz adapter, and more — and the few things still deferred." />
 </Cards>

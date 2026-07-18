@@ -1,4 +1,7 @@
 {
   "title": "Concepts",
-  "pages": ["agent-loop"]
+  "icon": "Lightbulb",
+  "pages": [
+    "agent-loop"
+  ]
 }

@@ -1,4 +1,11 @@
 {
   "title": "Authoring",
-  "pages": ["tools", "personas-and-agents", "attachments", "data-satellite", "transient-retry"]
+  "icon": "PencilRuler",
+  "pages": [
+    "tools",
+    "personas-and-agents",
+    "attachments",
+    "data-satellite",
+    "transient-retry"
+  ]
 }

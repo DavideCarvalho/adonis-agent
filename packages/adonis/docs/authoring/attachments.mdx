@@ -1,6 +1,7 @@
 ---
 title: Attachments & multimodal
 description: Let users attach images and PDFs to a message so a vision-capable model sees them natively — the MessageAttachment shape, the attachment-staging SPI, and the optional POST /agent/attachments upload route.
+icon: Paperclip
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
@@ -51,6 +52,32 @@ The route buffers the multipart `file` field, validates it against the size cap 
 
 <Callout type="info" title="The route is opt-in">
 Omit `attachmentStaging` and no upload surface is exposed — a client sends already-staged `MessageAttachment` references directly on `chat`. `attachmentStores.memory()` covers tests and dev (it `data:`-encodes the bytes); a real deployment binds its own store presigning against S3/GCS or wrapping the host's media pipeline.
+</Callout>
+
+## Non-public object stores — the download bypass
+
+When the model provider can consume the attachment `url` natively (most hosted vision models can fetch a public HTTPS URL), the URL passes straight through and nothing downloads it. But when it *can't* — or when your `url` points at a **non-public** object store the provider can't reach (local MinIO in dev, a VPC-only S3 bucket) — the Vercel AI SDK's `experimental_download` step fetches the bytes and inlines them for the model.
+
+The catch: the AI SDK's **default** downloader refuses `localhost` and private hostnames as an SSRF guard, so a staged-against-MinIO attachment dies with `AI_DownloadError: URL with hostname localhost is not allowed`. The package ships a ready-made replacement, `attachmentFetchDownloader`, on the `@adonis-agora/agent/ai-sdk` subpath — a plain-fetch downloader with **no** hostname policy — which you pass as the model's `experimental_download`:
+
+```ts title="config/agent.ts"
+import { defineConfig } from '@adonis-agora/agent'
+import { aiSdkModel, attachmentFetchDownloader } from '@adonis-agora/agent/ai-sdk'
+import { openai } from '@ai-sdk/openai'
+
+export default defineConfig({
+  model: () =>
+    aiSdkModel(openai('gpt-4o'), {
+      // Relax the SDK's SSRF guard so a MinIO/VPC-staged attachment can be fetched.
+      experimental_download: attachmentFetchDownloader(),
+    }),
+})
+```
+
+It mirrors the default's routing — a URL the model supports natively is left to the provider (`null`), everything else is fetched and inlined as bytes.
+
+<Callout type="warn" title="Only safe because staging owns the URLs">
+`attachmentFetchDownloader` is safe **only** because agent attachment URLs come exclusively from your own attachment-staging SPI presigner — never from user input. Do **not** reuse it for URLs a user can influence: without the hostname guard it will happily fetch an internal address. Pass your own `fetch` implementation (`attachmentFetchDownloader(myFetch)`) if you need to constrain it.
 </Callout>
 
 ## The flow

@@ -1,6 +1,7 @@
 ---
 title: RAG & retrieval
 description: Ground the agent in your own corpus — the Retriever, EmbeddingProvider, and Reranker SPIs, the memory and pgvector retrievers, and always-on "inject" retrieval that folds cited passages into the system prompt.
+icon: FileSearch
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
@@ -73,6 +74,118 @@ The production store — cosine/L2/inner similarity over a `vector(N)` column vi
 </Tab>
 
 </Tabs>
+
+## Composable retrieval strategies
+
+The `retrievers.memory()` / `.pgvector()` factories are convenience wrappers. Underneath, a `Retriever` is just an object with `retrieve(query, options?) → Passage[]`, and the package exports the concrete strategies from the **root** so you can build and compose them yourself. Every one of them *is* a `Retriever`, so any of them (or a stack of them) can go straight into the config's `retriever` slot.
+
+```ts
+import {
+  EmbeddingRetriever,   // embed the query, then vector-search a VectorStore
+  KeywordRetriever,     // in-memory BM25 lexical search
+  HybridRetriever,      // fuse several retrievers with Reciprocal Rank Fusion
+  RerankingRetriever,   // over-fetch, then reorder with a stronger Reranker
+  MemoryVectorStore,    // cosine similarity over a Map
+  PgVectorStore,        // pgvector-backed VectorStore
+  cosineSimilarity,     // the pure vector-similarity primitive
+  matchesFilter,        // the metadata-filter predicate (also an ACL primitive)
+  chunkDocuments,       // documents → ChunkRecord[] (aligned chunk ids)
+} from '@adonis-agora/agent'
+```
+
+### `EmbeddingRetriever` — vector search
+
+The building block behind `retrievers.memory()`/`.pgvector()`: it bridges an `EmbeddingProvider` and a `VectorStore` — embed the query, then `store.search(...)`. Construct it directly when you want to own the store instance (e.g. to ingest into it at runtime):
+
+```ts
+const store = new MemoryVectorStore()          // or new PgVectorStore(db, { … })
+const retriever = new EmbeddingRetriever(myEmbedder, store)
+
+const passages = await retriever.retrieve('how do refunds work?', { topK: 5 })
+```
+
+`PgVectorStore` is the production `VectorStore` — raw pgvector SQL over the structural `LucidDatabaseLike`, with `cosine`/`l2`/`inner` metrics and strict identifier validation on every table/column name. See [pgvector store](/docs/agent/retrieval/pgvector) for its schema and full options. (`PgVectorRetriever`, what `retrievers.pgvector()` builds, is `EmbeddingRetriever` narrowed to a `PgVectorStore`.)
+
+### `KeywordRetriever` — BM25 lexical search
+
+A dependency-free, in-memory **BM25** retriever: exact term matching with idf, term-frequency saturation (`k1`, default `1.5`) and document-length normalization (`b`, default `0.75`). It's the lexical complement to dense vector search — it nails rare tokens, ids, and exact phrases that embeddings blur. Feed it the **same** `ChunkRecord`s you upsert into the vector store (both from `chunkDocuments`) so their chunk ids line up:
+
+```ts
+import { KeywordRetriever, chunkDocuments } from '@adonis-agora/agent'
+
+const chunks = chunkDocuments(
+  [{ id: 'policy', text: '…', source: 'policy.pdf' }],
+  { chunkSize: 800, overlap: 100 },
+)
+
+const keyword = new KeywordRetriever({ k1: 1.5, b: 0.75 })
+keyword.add(chunks)                       // index (re-adding an id replaces it)
+const hits = await keyword.retrieve('SKU-4417 return window', { topK: 5 })
+```
+
+### `HybridRetriever` — RRF fusion
+
+Fuses several retrievers with **Reciprocal Rank Fusion**. RRF scores each passage by `Σ weight / (k + rank)` across the lists it appears in, so it needs *no* score normalization between incompatible scales (cosine similarity vs. BM25) — it works purely off rank. Deduplicated by passage id, so aligned chunk ids from dense and lexical retrievers reinforce each other. This is the robust default for "vector *and* keyword":
+
+```ts
+import { HybridRetriever } from '@adonis-agora/agent'
+
+const hybrid = new HybridRetriever(
+  [vectorRetriever, keywordRetriever],
+  {
+    k: 60,          // RRF constant (paper default); larger flattens rank weighting
+    fetchTopK: 20,  // candidates pulled from EACH retriever before fusion
+    weights: [1, 0.5], // per-retriever multipliers, same order as the array
+  },
+)
+
+export default defineConfig({
+  model: () => aiSdkModel(openai('gpt-4o-mini')),
+  retriever: hybrid,   // itself a Retriever
+})
+```
+
+### `RerankingRetriever` — two-stage precision
+
+Over-fetch cheap candidates from a base retriever, then reorder them with a stronger `Reranker` (usually a cross-encoder) and keep the top few. The standard precision boost: a fast first stage casts a wide net, a slow accurate second stage sharpens it. It composes over **any** retriever — vector, keyword, or the hybrid above — and is itself a `Retriever`, so you can stack it on top:
+
+```ts
+import { RerankingRetriever } from '@adonis-agora/agent'
+
+const retriever = new RerankingRetriever(
+  hybrid,        // base: fetch a wide candidate set
+  myReranker,    // a Reranker SPI (bring your own, or FakeReranker in tests)
+  { fetchTopK: 20 }, // candidates to pull before reranking (default 20)
+)
+// retrieve(query, { topK: 5 }) → the 5 best AFTER reranking
+```
+
+### Metadata filters as an ACL
+
+`RetrieveOptions.filter` is a `Record<string, unknown>` matched by `matchesFilter` (used by the memory store and `KeywordRetriever`; `PgVectorStore` runs the equivalent in SQL). It has two modes, and the array mode is a **capability-style access-control primitive** over a shared corpus:
+
+- a **scalar** value is exact-match — the record's value must equal it;
+- an **array** value is **match-any** (set membership / OR) — the record matches when its value for that key is one of them (or, for a multi-valued record, shares at least one element). An **empty array matches nothing** — the deny primitive.
+
+So a shared store can tag each chunk with an `audience` and the caller passes the tokens the current actor holds; a chunk the actor can't see is simply never retrieved, and the store never has to know what a token *means*:
+
+```ts
+// Ingest: tag each document with who may see it — `metadata` rides onto every chunk.
+await ingestDocuments(
+  [{ id: 'q3-plan', text: '…', source: 'plan.md',
+     metadata: { audience: ['public', 'role:ADMIN', 'base:acme'] } }],
+  { embedder, store, chunkSize: 800, overlap: 100 },
+)
+
+// Retrieve: pass only the tokens THIS actor holds.
+const passages = await retriever.retrieve(query, {
+  topK: 5,
+  filter: { audience: ['public', ...actor.roles.map((r) => `role:${r}`), `base:${actor.tenantRef}`] },
+})
+// A chunk whose audience shares no token with the filter can never come back.
+```
+
+`matchesFilter(metadata, filter)` and `cosineSimilarity(a, b)` are exported as pure functions in their own right, handy for unit tests or for building a bespoke store.
 
 ## Inject mode — always-on retrieval
 

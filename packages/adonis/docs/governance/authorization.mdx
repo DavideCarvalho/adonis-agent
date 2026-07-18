@@ -1,6 +1,7 @@
 ---
 title: Authorization
 description: The fail-closed governance model — the DefaultToolAuthorizer (ADMIN-only, role intersection), the offered-and-invoke double check, and the ActorResolver identity seam that never fabricates a caller.
+icon: ShieldCheck
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
@@ -66,9 +67,68 @@ Authorization runs **twice** through the same `can(actor, tool)`, which is what 
 
 Every tool can also declare an `ability` (e.g. `'refund.issue'`). The default role-based policy ignores it, but an *ability-aware* `RolesPolicy` consults it — and one ships: the [`@adonis-agora/authz`](/docs/authz) Bouncer adapter, `authzToolAuthorizer`, which checks each tool's `ability` through authz, tenant-scoped and fail-closed. Because `can` may return a promise, the async authz check drops straight into the same seam — both filter layers pick it up. Swap it in via `authorizer`; see [Authz (Bouncer) adapter](/docs/agent/governance/authz-bouncer). `roles` and `ability` share the SPI, so you can declare abilities now and switch the policy anytime.
 
+## Object-level ownership
+
+Role and ability gate *which tools* an actor may call. They say nothing about *which records* an actor may address — and a chat run or a thread **is** a record, keyed by a `runId` / `threadId`. Without a second check, any authenticated caller who learns (or guesses) another actor's `runId` could re-attach to that run's live token stream, cancel it, or deliver a HITL approval on its behalf; a `threadId` could load a victim's full conversation history back over SSE, or append the caller's own turn into someone else's thread. That is a textbook **IDOR** (insecure direct object reference), and `0.6.0` closed it.
+
+Every per-actor route now runs an **object-level ownership check** after resolving the actor and before touching the record. The decision core is the router-free `evaluateOwnership`, exported so you can unit-test it (or reuse it) without booting an app:
+
+```ts
+import { evaluateOwnership } from '@adonis-agora/agent'
+import type { OwnershipVerdict } from '@adonis-agora/agent'
+
+// evaluateOwnership(actorId, ownerRef, privileged): OwnershipVerdict
+evaluateOwnership('u_1', 'u_1', false)  // → { ok: true,  status: 200 }  (the caller owns it)
+evaluateOwnership('u_2', 'u_1', false)  // → { ok: false, status: 403 }  (someone else's record)
+evaluateOwnership('u_2', null, false)   // → { ok: false, status: 404 }  (unknown / not owned)
+evaluateOwnership('u_2', 'u_1', true)   // → { ok: true,  status: 200 }  (governance-privileged)
+```
+
+The three outcomes are deliberate:
+
+| `ownerRef` | `privileged` | Verdict | Why |
+| --- | --- | --- | --- |
+| `=== actorId` | any | `{ ok: true, status: 200 }` | The caller owns the record. |
+| `=== null` | any | `{ ok: false, status: 404 }` | Unknown record — reply `404`, **not** `403`, so the response never confirms to a non-owner that an id they don't own exists. |
+| someone else's | `false` | `{ ok: false, status: 403 }` | Not the owner, not privileged. |
+| someone else's | `true` | `{ ok: true, status: 200 }` | A cross-actor privileged caller (see below) may act across actors. |
+
+Inside the provider, the private `#assertOwner(ctx, actor, ownerRef, kind, governanceAuthorize)` helper wires this into the request: it looks up the record's owner (`service.runOwner(id)` / `service.threadOwner(id)`), computes `privileged` by running the same `governanceAuthorize` gate used for the governance read-model, then applies `evaluateOwnership`. On a non-`ok` verdict it replies the verdict's status (`404` → `"<kind> not found"`, `403` → `"forbidden"`) and short-circuits the handler.
+
+<Callout type="info" title="Which routes are owner-scoped">
+`POST /agent/chat` (only when continuing an existing `threadId`), `GET /agent/chat/:runId/stream`, `POST /agent/chat/:runId/cancel`, `POST /agent/tool-call/approve`, `POST /agent/tool-call/reject`, `GET /agent/threads/:id`, `DELETE /agent/threads/:id`, and `POST /agent/threads/:id/fork-from/:messageId` all enforce ownership. A **new** chat (no `threadId`) has no owner to check; the actor-scoped list routes (`GET /agent/threads`, `GET /agent/quota/today`) are already filtered to `actor.id`.
+</Callout>
+
+<Callout type="warn" title="With no governance gate, ownership is strict">
+`privileged` is `true` only when a `governanceAuthorize` gate is configured **and** this actor passes it. With no gate configured, `privileged` is always `false` — so ownership is strict and even an admin can only touch its own runs and threads through these routes. That is intentional: cross-actor access is a governance privilege, and the app opts into it by configuring the gate.
+</Callout>
+
+## Governance route authorization
+
+The cross-actor [governance read-model](/docs/agent/governance/read-model) — `/agent/governance/*` — exposes *every* actor's spend, usage, threads, runs, and pending approvals. It is not per-actor data, so ownership doesn't apply; instead it is gated by a single predicate, `governanceAuthorize`:
+
+```ts title="config/agent.ts"
+import { defineConfig } from '@adonis-agora/agent'
+
+export default defineConfig({
+  // ...
+  // Runs AFTER the actor is resolved (the caller is already authenticated).
+  // Return false → the route replies 403. Typically an ADMIN check.
+  governanceAuthorize: (actor, _ctx) => actor.roles?.includes('ADMIN') ?? false,
+})
+```
+
+Its type is `AgentGovernanceAuthorize = (actor, ctx) => boolean | Promise<boolean>`, and it is applied by the router-free `evaluateGovernanceGate` (also exported), which is **fail-closed**: an `authorize` that *throws* denies with `403` (and surfaces the message), exactly like a `false` return.
+
+- **Omit it** and any resolved (authenticated) actor may read the governance read-model — the historical behavior, correct only when every authenticated caller is trusted staff. The provider logs a startup warning when the governance routes are mounted without a gate.
+- The gate **does not** cover `GET /agent/approvals/mine`, which is always scoped to the calling actor's own pending approvals — so a non-admin surface can poll its own approvals even while the cross-actor read-model is ADMIN-only.
+- The same predicate also feeds the object-level ownership check above: passing `governanceAuthorize` is what makes a caller `privileged` (may act across actors). It mirrors [`@adonis-agora/agent-dashboard`](/docs/agent/governance/dashboard)'s `authorize` hook, so the JSON routes and the console SPA that reads them can be gated with the *same* predicate.
+
 ## What governance covers
 
 - Which tools an actor's **role** may reach (this page).
 - Which tools a **persona/agent** exposes — a second allow-list layer. See [Personas & agents](/docs/agent/authoring/personas-and-agents).
 - Which tools need a **human** before they run — the `action` kind and HITL. See [Streaming & HTTP](/docs/agent/streaming-and-http#human-in-the-loop).
+- Which **records** (runs, threads) an actor may address — object-level ownership (this page).
+- Who may read the cross-actor **governance read-model** — the `governanceAuthorize` gate (this page).
 - How much an actor may **spend** — the daily quota, checked before the model runs. See [Quota & cost](/docs/agent/governance/quota-and-cost).

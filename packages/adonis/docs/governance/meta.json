@@ -1,5 +1,6 @@
 {
   "title": "Governance",
+  "icon": "Shield",
   "pages": [
     "authorization",
     "authz-bouncer",

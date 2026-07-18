@@ -1,6 +1,7 @@
 ---
 title: Tools
 description: Give the agent things to do — @AiTool classes and defineTool functions, discovered from app/agent_tools, with read/action kinds, Standard Schema inputs, and role/ability gating.
+icon: Wrench
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
@@ -35,7 +36,104 @@ export default class GetOrderTool implements ToolHandler<{ orderId: string }> {
 }
 ```
 
-The decorator stamps its options onto the class; discovery instantiates it once and binds `execute`.
+The decorator stamps its options onto the class; discovery resolves an instance through the IoC container (see [Constructor DI](#constructor-di-inject) below) and binds `execute`.
+
+## Base classes — `BaseTool` / `ReadTool` / `ActionTool`
+
+The `@AiTool` decorator isn't the only way to author a class. Three abstract base classes give you the same registration with a plain `static tool` field and a type-checked `execute` — the counterpart of durable's `BaseWorkflow`. Extend one, implement `execute(input, ctx)`, and discovery reads the static `tool` off your subclass and registers it (the abstract bases carry no `static tool`, so they're never registered themselves):
+
+- **`BaseTool<I, O>`** — the general base. Declare the full options including `kind`. The inherited `static tool?: AiToolOptions` type-checks your literal, so you write neither `satisfies AiToolOptions` nor a type annotation.
+- **`ReadTool<I, O>`** — fixes `kind: 'read'`. Your `static tool` omits `kind` and type-checks *truly bare* — just `{ name, description, input, ability? }`.
+- **`ActionTool<I, O>`** — fixes `kind: 'action'` (requires HITL approval). Same bare `static tool`, no `kind`.
+
+The `<I, O>` type parameters flow into `execute`'s signature, so the compiler checks the body against what the tool promises — `I` is the parsed input, `O` is the return.
+
+<Tabs items={['ReadTool', 'ActionTool', 'BaseTool']}>
+
+<Tab value="ReadTool">
+
+```ts title="app/agent_tools/allocation_queue.ts"
+import { ReadTool } from '@adonis-agora/agent'
+import type { AiToolCtx } from '@adonis-agora/agent'
+import { z } from 'zod'
+
+const input = z.object({})
+type Input = z.infer<typeof input>
+
+export default class AllocationQueue extends ReadTool<Input, Row[]> {
+  // No `kind` — the base fixes 'read'. Type-checks bare, no `satisfies`.
+  static tool = {
+    name: 'allocation_queue',
+    description: 'The current allocation queue.',
+    input,
+    ability: 'agent.queue.read',
+  }
+
+  async execute(_input: Input, ctx: AiToolCtx): Promise<Row[]> {
+    // ...
+    return []
+  }
+}
+```
+
+</Tab>
+
+<Tab value="ActionTool">
+
+```ts title="app/agent_tools/close_ticket.ts"
+import { ActionTool } from '@adonis-agora/agent'
+import type { AiToolCtx } from '@adonis-agora/agent'
+import { z } from 'zod'
+
+const input = z.object({ ticketId: z.string() })
+type Input = z.infer<typeof input>
+
+export default class CloseTicket extends ActionTool<Input, { closed: string }> {
+  // kind: 'action' is fixed by the base → this tool requires HITL approval.
+  static tool = {
+    name: 'close_ticket',
+    description: 'Close a support ticket.',
+    input,
+    ability: 'agent.tickets.close',
+  }
+
+  async execute({ ticketId }: Input, _ctx: AiToolCtx) {
+    return { closed: ticketId }
+  }
+}
+```
+
+</Tab>
+
+<Tab value="BaseTool">
+
+```ts title="app/agent_tools/get_weather.ts"
+import { BaseTool } from '@adonis-agora/agent'
+import type { AiToolCtx } from '@adonis-agora/agent'
+import { z } from 'zod'
+
+const input = z.object({ city: z.string() })
+type Input = z.infer<typeof input>
+
+export default class GetWeather extends BaseTool<Input, { tempC: number }> {
+  // BaseTool takes the full options — declare `kind` yourself.
+  static tool = {
+    name: 'get_weather',
+    kind: 'read',
+    description: 'Current weather for a city.',
+    input,
+    roles: ['MEMBER'],
+  } as const
+
+  async execute({ city }: Input, _ctx: AiToolCtx) {
+    return { tempC: 21 }
+  }
+}
+```
+
+</Tab>
+
+</Tabs>
 
 ## `defineTool` functions
 
@@ -112,6 +210,49 @@ interface AiToolCtx {
 ```
 
 Identity is single-sourced on `ctx.actor` — read `ctx.actor.id` / `ctx.actor.tenantRef` and scope every query to it. Never trust an id the model passes in its arguments.
+
+## Constructor DI (`@inject`)
+
+Class tools — whether `@AiTool`-decorated or a `BaseTool`/`ReadTool`/`ActionTool` subclass — are resolved through the **AdonisJS IoC container**, so a tool declares its dependencies in its constructor and lets the container build them. This is the idiomatic Adonis way: no service locator, no manual `new`, and your handler stays testable.
+
+```ts title="app/agent_tools/issue_refund.ts"
+import { inject } from '@adonisjs/core'
+import { ActionTool } from '@adonis-agora/agent'
+import type { AiToolCtx } from '@adonis-agora/agent'
+import { z } from 'zod'
+import RefundService from '#services/refund_service'
+
+const input = z.object({ orderId: z.string(), amountCents: z.number().int().positive() })
+type Input = z.infer<typeof input>
+
+@inject()
+export default class IssueRefund extends ActionTool<Input, { refundId: string }> {
+  // The container injects RefundService (and its transitive deps) here.
+  constructor(private readonly refunds: RefundService) {
+    super()
+  }
+
+  static tool = {
+    name: 'issue_refund',
+    description: 'Issue a refund against an order.',
+    input,
+    ability: 'agent.refunds.issue',
+  }
+
+  async execute({ orderId, amountCents }: Input, ctx: AiToolCtx) {
+    // Always scope to the acting identity — never the model's arguments.
+    return this.refunds.issue({ orderId, amountCents, actorId: ctx.actor.id })
+  }
+}
+```
+
+<Callout type="info" title="Lazy and cached">
+The tool is resolved via `app.container.make(cls)` on its **first** invocation and then cached for the run's lifetime — not eagerly at discovery. Discovery runs inside the provider's `boot()`, before the app is fully booted, so an eager `make()` could fail resolving a peer service that isn't ready yet (the same reason the Lucid store factory resolves lazily). A tool that constructs cleanly with no deps works unchanged — `@inject()` is only needed when the constructor takes arguments.
+</Callout>
+
+<Callout type="info" title="When there's no container">
+`registerToolExport` also runs in a container-less path (used by some tests) where it instantiates a zero-arg tool directly with `new`. In an AdonisJS app the provider always passes the container, so `@inject` DI is the norm.
+</Callout>
 
 ## Discovery
 

@@ -1,11 +1,12 @@
 ---
 title: Streaming & HTTP
 description: The eleven /agent routes, the byte-for-byte SSE envelope, human-in-the-loop approve/reject, re-attaching to a live run, and consuming the stream from React.
+icon: MessageSquareText
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
-The provider mounts eleven core routes under `config.path` (default `agent`) at boot. They cover the full chat lifecycle — start, stream, cancel, HITL, threads, and quota. No controllers to write; the provider resolves the actor, calls the framework-agnostic `AgentService`, and pipes the SSE. Two optional route groups mount only when their config is present: `POST /agent/attachments` (when `attachmentStaging` is set — see [Attachments](/docs/agent/authoring/attachments)) and the `/agent/governance/*` read routes (when `governanceQueries` is set — see [Governance read-model](/docs/agent/governance/read-model)).
+The provider mounts eleven core routes under `config.path` (default `agent`) at boot. They cover the full chat lifecycle — start, stream, cancel, HITL, threads, and quota. No controllers to write; the provider resolves the actor, calls the framework-agnostic `AgentService`, and pipes the SSE. Three optional route groups mount only when their config is present: `POST /agent/attachments` (when `attachmentStaging` is set — see [Attachments](/docs/agent/authoring/attachments)), `GET /agent/approvals/mine` and the `/agent/governance/*` read routes (both when `governanceQueries` is set — see [Governance read-model](/docs/agent/governance/read-model)).
 
 ## The routes
 
@@ -22,12 +23,19 @@ The provider mounts eleven core routes under `config.path` (default `agent`) at 
 | 9 | `DELETE /agent/threads/:id` | Soft-delete a thread. |
 | 10 | `POST /agent/threads/:id/fork-from/:messageId` | Fork a thread up to a message (regenerate / branch). |
 | 11 | `GET /agent/quota/today` | The actor's token spend today: `{ usedTokens }`. |
+| 12 | `GET /agent/approvals/mine` <span data-opt>optional</span> | The **calling actor's own** pending HITL approvals, oldest first. Query: `limit?` (default `50`, clamped to `200`). Mounts with `governanceQueries` but is **not** behind `governanceAuthorize` — it is always scoped to `actor.id`, so a non-admin surface (e.g. a coordinator's chat) can poll its own suspended tool calls even when the cross-actor read-model is ADMIN-only. |
 
 <Callout type="info" title="Actor-scoped routes fail closed">
 Routes that need identity — chat, threads list, quota — resolve the actor first. If the resolver throws (or none is configured), the route replies `401` and never runs. See [Authorization](/docs/agent/governance/authorization).
 </Callout>
 
+<Callout type="warn" title="Owner-scoped routes (IDOR protection)">
+Routes addressed by a `runId` or `threadId` — stream, cancel, approve, reject, `threads/:id` (get/delete/fork), and continuing an existing thread on `chat` — additionally enforce **object-level ownership**: a caller may act only on the runs and threads it owns. A non-owner that guesses an id gets `404` (unknown) or `403` (not owner), unless it is governance-privileged. See [Object-level ownership](/docs/agent/governance/authorization#object-level-ownership).
+</Callout>
+
 The persona catalog route is registered *before* `threads/:id` so it isn't captured by the `:id` param.
+
+<style>{`[data-opt]{font-size:.7em;vertical-align:middle;margin-left:.4em;padding:.1em .5em;border-radius:999px;background:color-mix(in srgb, var(--color-fd-primary) 12%, transparent);color:var(--color-fd-primary);font-weight:600;text-transform:uppercase;letter-spacing:.03em}`}</style>
 
 ## The SSE envelope
 

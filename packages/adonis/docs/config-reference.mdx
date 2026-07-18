@@ -1,6 +1,7 @@
 ---
 title: Configuration reference
 description: Every field of AgentConfig — the shape of config/agent.ts — with its type, default, and behavior.
+icon: Sliders
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
@@ -61,7 +62,11 @@ export default defineConfig({
 
 ### `governanceQueries`
 
-`AgentGovernanceQueries | GovernanceQueriesFactory`. The read-model the optional `/agent/governance/*` routes serve from — cost/usage rollups, run lifecycle, tool stats, reliability, and the approvals inbox. Pass a lazy `governanceQueries.lucid()` (which prices rollups against `pricingStore`). **Omit → the governance routes aren't mounted.** See [Governance read-model](/docs/agent/governance/read-model).
+`AgentGovernanceQueries | GovernanceQueriesFactory | false`. The read-model the optional `/agent/governance/*` routes serve from — cost/usage rollups, run lifecycle, tool stats, reliability, and the approvals inbox. Defaults to mirroring a `stores.lucid()` `store` on the same connection (so the routes mount with no extra config); pass a lazy `governanceQueries.lucid()` to override, or `false` to disable. **With it off (or a non-Lucid store and no explicit value) the governance routes aren't mounted.** See [Governance read-model](/docs/agent/governance/read-model).
+
+### `governanceAuthorize`
+
+`AgentGovernanceAuthorize` — `(actor, ctx) => boolean | Promise<boolean>`. The authorization gate for the **cross-actor** `/agent/governance/*` read routes. It runs *after* the actor is resolved (the caller is authenticated) and decides whether this actor may read the platform-wide governance read-model — every actor's spend, usage, threads, and pending approvals. Return `false` (or throw — it's **fail-closed**) → the route replies `403`. **Omit → any authenticated actor may read governance** (the provider logs a startup warning); typically set it to an ADMIN check. It does **not** gate the per-actor `GET /agent/approvals/mine` route, and the same predicate feeds the [object-level ownership](/docs/agent/governance/authorization#object-level-ownership) check (passing it makes a caller cross-actor **privileged**). Mirrors the [dashboard](/docs/agent/governance/dashboard)'s `authorize` hook. See [Governance route authorization](/docs/agent/governance/authorization#governance-route-authorization).
 
 ### `retriever` / `retrievalTopK`
 

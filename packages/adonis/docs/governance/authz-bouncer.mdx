@@ -1,6 +1,7 @@
 ---
 title: Authz (Bouncer) adapter
 description: Swap the ADMIN-only role gate for ability-based authorization — the @adonis-agora/agent/authz adapter checks each tool's declared ability through @adonis-agora/authz (Bouncer), tenant-scoped and fail-closed.
+icon: KeyRound
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
@@ -54,3 +55,26 @@ authzToolAuthorizer({
 ```
 
 Requires `@adonis-agora/authz` installed and configured (`config/authz.ts`); the adapter carries zero import of the package — it references only the structural `can(...)` slice — so apps that don't use authz never load it.
+
+## Resolving the actor from authz
+
+The `@adonis-agora/agent/authz` subpath also exports a matching **actor resolver**, `authzActorResolver` (class `AuthzActorResolver`), so identity and authorization can come from the *same* stack. Where [`AuthActorResolver`](/docs/agent/governance/authorization#the-actor-resolver--who-is-calling) reads `ctx.auth.user`, this resolver reads the caller from the active **Agora context** authkit populates (`userRef`, `tenantId`) and takes the caller's roles from authz's `effectiveRoles` (the union of global ∪ app ∪ store roles). It ignores the transport request entirely, so it's framework-agnostic and needs no `ctx.auth`.
+
+```ts title="config/agent.ts"
+import { defineConfig } from '@adonis-agora/agent'
+import { authzActorResolver, authzToolAuthorizer } from '@adonis-agora/agent/authz'
+
+const authz = await app.container.make('authz.service')
+
+export default defineConfig({
+  model: () => aiSdkModel(openai('gpt-4o-mini')),
+  actorResolver: authzActorResolver({ authz }),   // identity + roles from context/authz
+  authorizer: authzToolAuthorizer({ authz }),      // ability checks through Bouncer
+})
+```
+
+The resolver hands the context `userRef` straight to `effectiveRoles` (scoped to the context `tenantId`), so global roles like `ADMIN` land in `actor.roles` with no extra wiring, and `actor.tenantRef` is set from the context tenant.
+
+<Callout type="warn" title="Fail-closed — never fabricates an identity">
+If there's no `userRef.id` in the Agora context, `authzActorResolver` **throws** (and the provider replies `401`). It never invents a caller. The agent route must therefore sit behind authkit auth middleware (which populates the context), with the `@adonis-agora/context` provider registered — otherwise the context slot is absent and every request fails closed.
+</Callout>
