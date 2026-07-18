@@ -1,7 +1,5 @@
 {
   "title": "Durability",
   "icon": "Infinity",
-  "pages": [
-    "durable-runner"
-  ]
+  "pages": ["durable-runner"]
 }
