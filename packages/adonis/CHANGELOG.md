@@ -1,5 +1,15 @@
 # @adonis-agora/agent
 
+## 0.12.0
+
+### Minor Changes
+
+- [`0998975`](https://github.com/DavideCarvalho/adonis-agent/commit/0998975ca76b88c84b5e428139af0f363f28abbb) - Generative UI: typed stream frames (`text`|`component`), `AiToolCtx.emitComponent`, and `event: component` in the SSE provider. Backward compatible for text-only consumers.
+
+### Patch Changes
+
+- [#29](https://github.com/DavideCarvalho/adonis-agent/pull/29) [`fd77544`](https://github.com/DavideCarvalho/adonis-agent/commit/fd77544040bdf8d95c532f3f70c6bd7673cec4ca) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Fix agent tool-loop dropping tool results. `mapMessages` in the AI SDK adapter skipped `toolResults` on `role: 'user'` messages (early `continue`), but `agent-loop` feeds tool output back as a synthetic `{ role: 'user', content: '', toolResults }` carrier — so the results were silently dropped and the follow-up model call threw `AI_MissingToolResultsError`. The user branch now emits the `tool` result message (via a shared `pushToolResults` helper) and skips the empty user turn so the tool result stays adjacent to the assistant tool-call. Multi-step tool-calling now completes for OpenAI-compatible providers.
+
 ## 0.11.0
 
 ### Minor Changes
