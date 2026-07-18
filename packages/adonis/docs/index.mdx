@@ -11,7 +11,7 @@ import { Cards, Card } from 'fumadocs-ui/components/card';
 **`@adonis-agora/agent`** adds an AI agent to your AdonisJS app: streaming chat, tool-calling, and multi-agent delegation — all behind a governance layer that is **fail-closed by default**. A tool a user's role can't reach is never even offered to the model; an `action` tool never runs without a human approving it; the caller's identity is never fabricated. You wire a model, declare a few tools, and get a governed `/agent/chat` endpoint that streams tokens over SSE.
 
 <Callout type="info" title="Alpha">
-  This package is published as `0.11.0`. Everything the initial `0.1.0` deferred — the durable runner, RAG (memory + pgvector), the governance read-model, the dashboard SPA, the Telescope tab, the `@adonis-agora/authz` (Bouncer) adapter, the governed SQL data satellite, multimodal attachments, and Redis streaming — has since shipped. The API documented here reflects the current shipped surface — grounded in the code, not a wishlist. Pin a version and expect refinements before `1.0`.
+  This package is published as `0.12.0`. Everything the initial `0.1.0` deferred — the durable runner, RAG (memory + pgvector), the governance read-model, the dashboard SPA, the Telescope tab, the `@adonis-agora/authz` (Bouncer) adapter, the governed SQL data satellite, multimodal attachments, and Redis streaming — has since shipped. The API documented here reflects the current shipped surface — grounded in the code, not a wishlist. Pin a version and expect refinements before `1.0`.
 </Callout>
 
 ## The problem it solves
