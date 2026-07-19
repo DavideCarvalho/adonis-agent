@@ -10,6 +10,8 @@ import {
   RerankingRetriever,
   type RetrieveOptions,
   type Retriever,
+  type VectorSearchOptions,
+  type VectorStore,
   chunkDocuments,
   ingestChunks,
 } from '../src/index.js';
@@ -62,6 +64,52 @@ describe('KeywordRetriever (BM25)', () => {
     keyword.add([{ id: 'd', text: 'beta gamma' }]);
     expect(await keyword.retrieve('alpha', { topK: 5 })).toHaveLength(0);
     expect(await keyword.retrieve('beta', { topK: 5 })).toHaveLength(1);
+  });
+});
+
+describe('minScore relevance floor', () => {
+  it('MemoryVectorStore.search drops passages below the floor (before top-K)', async () => {
+    const store = new MemoryVectorStore();
+    await store.upsert([
+      { id: 'near', text: 'near', embedding: [1, 0, 0] },
+      { id: 'orthogonal', text: 'orthogonal', embedding: [0, 1, 0] },
+    ]);
+    // Query aligned with 'near' → cosine 1.0; 'orthogonal' → cosine 0.0.
+    const passages = await store.search([1, 0, 0], { topK: 5, minScore: 0.5 });
+    expect(passages.map((p) => p.id)).toEqual(['near']);
+  });
+
+  it('MemoryVectorStore.search with no minScore returns every match (unchanged)', async () => {
+    const store = new MemoryVectorStore();
+    await store.upsert([
+      { id: 'near', text: 'near', embedding: [1, 0, 0] },
+      { id: 'orthogonal', text: 'orthogonal', embedding: [0, 1, 0] },
+    ]);
+    const passages = await store.search([1, 0, 0], { topK: 5 });
+    expect(passages).toHaveLength(2);
+  });
+
+  it('EmbeddingRetriever.retrieve threads minScore through to the store', async () => {
+    const embedder = new FakeEmbeddingProvider();
+    const seen: VectorSearchOptions[] = [];
+    const recordingStore: VectorStore = {
+      async upsert() {},
+      async remove() {},
+      async listDocuments() {
+        return [];
+      },
+      async search(_embedding, options) {
+        seen.push(options);
+        return [];
+      },
+    };
+    const retriever = new EmbeddingRetriever(embedder, recordingStore);
+    await retriever.retrieve('anything', { topK: 3, minScore: 0.42 });
+    expect(seen[0]?.minScore).toBe(0.42);
+
+    // With no minScore, none is forwarded (behavior unchanged).
+    await retriever.retrieve('anything', { topK: 3 });
+    expect(seen[1]?.minScore).toBeUndefined();
   });
 });
 

@@ -18,6 +18,13 @@ export interface VectorSearchOptions {
    * capability-token ACL primitive. See {@link import('./filter.js').matchesFilter}.
    */
   filter?: Record<string, unknown>;
+  /**
+   * Relevance floor, passed through from `RetrieveOptions.minScore`: results whose `score` is below it
+   * are dropped BEFORE the top-K cut (so the K returned are all above the floor). `score` is higher-is-
+   * more-relevant (cosine similarity `1 - distance`, or a negated L2/inner distance). Undefined → no
+   * floor (unchanged behavior).
+   */
+  minScore?: number;
 }
 
 /**

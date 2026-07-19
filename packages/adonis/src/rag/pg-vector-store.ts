@@ -308,16 +308,34 @@ export class PgVectorStore implements VectorStore {
   async search(embedding: number[], options: VectorSearchOptions): Promise<Passage[]> {
     const c = this.col;
     const vector = toVectorLiteral(embedding);
-    const where = buildMetadataWhere(options.filter, c.metadata);
+    const scoreExpr = this.metric.score(c.embedding);
+    const meta = buildMetadataWhere(options.filter, c.metadata);
+    // Combine the metadata predicate with an optional minScore relevance floor. Filtering the score
+    // expression in SQL (not in JS after the fact) keeps the floor applied BEFORE `LIMIT`, so the K
+    // returned are all above the floor. `buildMetadataWhere` prefixes `WHERE ` (6 chars) — strip it so
+    // the clauses can be re-joined with the floor via AND. When neither is present the query shape and
+    // binding order are byte-for-byte identical to before.
+    const clauses: string[] = [];
+    const whereBindings: unknown[] = [];
+    if (meta.sql !== '') {
+      clauses.push(meta.sql.slice('WHERE '.length));
+      whereBindings.push(...meta.bindings);
+    }
+    if (options.minScore !== undefined) {
+      // The score expression carries its own `?::vector`, so the embedding is bound again here.
+      clauses.push(`${scoreExpr} >= ?`);
+      whereBindings.push(vector, options.minScore);
+    }
+    const whereSql = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     // Bindings are consumed positionally, in the exact order the `?`s appear: score expr (embedding),
-    // then the optional filter clause(s), then the ORDER BY embedding, then the LIMIT. The embedding is
-    // bound TWICE — once per `?::vector` — because a positional `?` cannot be reused like a numbered `$1`.
-    const bindings: unknown[] = [vector, ...where.bindings, vector, options.topK];
+    // then the optional filter/minScore clause(s), then the ORDER BY embedding, then the LIMIT. The
+    // embedding is bound once per `?::vector` because a positional `?` cannot be reused like a `$1`.
+    const bindings: unknown[] = [vector, ...whereBindings, vector, options.topK];
     const raw = await this.db.rawQuery(
       `SELECT ${c.id} AS id, ${c.text} AS text, ${c.source} AS source, ${c.metadata} AS metadata,
-              ${this.metric.score(c.embedding)} AS score
+              ${scoreExpr} AS score
        FROM ${this.table}
-       ${where.sql}
+       ${whereSql}
        ORDER BY ${c.embedding} ${this.metric.operator} ?::vector
        LIMIT ?`,
       bindings,

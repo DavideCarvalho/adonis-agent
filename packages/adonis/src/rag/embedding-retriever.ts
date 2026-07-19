@@ -21,6 +21,7 @@ export class EmbeddingRetriever implements Retriever {
     return this.store.search(embedding, {
       topK: options.topK ?? 5,
       ...(options.filter !== undefined ? { filter: options.filter } : {}),
+      ...(options.minScore !== undefined ? { minScore: options.minScore } : {}),
     });
   }
 }

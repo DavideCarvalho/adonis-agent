@@ -52,10 +52,16 @@ export class MemoryVectorStore implements VectorStore {
       if (options.filter !== undefined && !matchesFilter(record.metadata, options.filter)) {
         continue;
       }
+      const score = cosineSimilarity(embedding, record.embedding);
+      // Relevance floor: drop below-threshold passages before the top-K cut, so `minScore` never
+      // leaves the returned K padded with weakly-related sources.
+      if (options.minScore !== undefined && score < options.minScore) {
+        continue;
+      }
       scored.push({
         id: record.id,
         text: record.text,
-        score: cosineSimilarity(embedding, record.embedding),
+        score,
         ...(record.source !== undefined ? { source: record.source } : {}),
         ...(record.metadata !== undefined ? { metadata: record.metadata } : {}),
       });

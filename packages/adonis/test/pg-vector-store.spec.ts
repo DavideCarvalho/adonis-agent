@@ -136,6 +136,37 @@ describe('PgVectorStore.search — similarity SQL + bindings', () => {
     ]);
   });
 
+  it('adds a minScore relevance floor as a score-expr >= ? WHERE clause (before LIMIT)', async () => {
+    const db = new RecordingDb();
+    const store = new PgVectorStore(db);
+
+    await store.search(EMBEDDING, { topK: 5, minScore: 0.7 });
+
+    const { sql, bindings } = db.last;
+    // The score expression is filtered in-SQL so the floor applies BEFORE the top-K cut.
+    expect(flat(sql)).toContain('WHERE 1 - (embedding <=> ?::vector) >= ?');
+    // Order: score-vector (SELECT), minScore-vector + threshold (WHERE), order-vector, limit.
+    expect(bindings).toEqual([VECTOR_LITERAL, VECTOR_LITERAL, 0.7, VECTOR_LITERAL, 5]);
+  });
+
+  it('combines a metadata filter and a minScore floor with AND', async () => {
+    const db = new RecordingDb();
+    const store = new PgVectorStore(db);
+
+    await store.search(EMBEDDING, { topK: 4, filter: { tenantRef: 't1' }, minScore: 0.5 });
+
+    const { sql, bindings } = db.last;
+    expect(flat(sql)).toContain('WHERE metadata @> ?::jsonb AND 1 - (embedding <=> ?::vector) >= ?');
+    expect(bindings).toEqual([
+      VECTOR_LITERAL,
+      '{"tenantRef":"t1"}',
+      VECTOR_LITERAL,
+      0.5,
+      VECTOR_LITERAL,
+      4,
+    ]);
+  });
+
   it('an empty array filter denies via a WHERE false clause (no metadata binding)', async () => {
     const db = new RecordingDb();
     const store = new PgVectorStore(db);

@@ -23,6 +23,16 @@ export interface RetrieveOptions {
   topK?: number;
   /** Impl-specific metadata filter (e.g. `{ tenantRef }`). Opaque to the runtime. */
   filter?: Record<string, unknown>;
+  /**
+   * Relevance floor: drop every passage whose {@link Passage.score} is below this value (a passage is
+   * kept only when `score >= minScore`). `score` is higher-is-more-relevant across this lib — cosine
+   * SIMILARITY (`1 - distance`) for the vector store, or a negated L2/inner distance — so this is a
+   * similarity threshold for strict-grounding RAG that never cites weakly-related sources. Applied
+   * BEFORE the top-K cut, so the returned passages are all above the floor. Undefined → no floor
+   * (identical to today). Honored by the vector-store retrieval path (a store's `search` and the
+   * {@link import('../rag/embedding-retriever.js').EmbeddingRetriever} that threads it through).
+   */
+  minScore?: number;
 }
 
 export interface Retriever {
