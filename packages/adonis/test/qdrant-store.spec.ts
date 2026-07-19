@@ -172,6 +172,32 @@ describe('QdrantStore.search', () => {
     expect('score_threshold' in args).toBe(false);
     expect(args.limit).toBe(5);
   });
+
+  it('metric l2: nega o score (distância → relevância) e nega o score_threshold enviado', async () => {
+    const client = new RecordingQdrantClient();
+    client.queryResult = {
+      points: [{ score: 0.3, payload: { id: 'doc-1#0', text: 'trecho' } }],
+    };
+    const store = new QdrantStore(client, { collection: 'rag', dimension: 3, metric: 'l2' });
+    const passages = await store.search([0.1, 0.2, 0.3], { topK: 5, minScore: 0.2 });
+
+    const [, args] = client.last('query') as [string, any];
+    expect(args.score_threshold).toBe(-0.2);
+    expect(passages[0]?.score).toBe(-0.3);
+  });
+
+  it('metric cosine (default): score e score_threshold passam sem alteração', async () => {
+    const client = new RecordingQdrantClient();
+    client.queryResult = {
+      points: [{ score: 0.71, payload: { id: 'doc-1#0', text: 'trecho' } }],
+    };
+    const store = new QdrantStore(client, { collection: 'rag', dimension: 3 });
+    const passages = await store.search([0.1, 0.2, 0.3], { topK: 5, minScore: 0.4 });
+
+    const [, args] = client.last('query') as [string, any];
+    expect(args.score_threshold).toBe(0.4);
+    expect(passages[0]?.score).toBe(0.71);
+  });
 });
 
 describe('QdrantStore.remove', () => {

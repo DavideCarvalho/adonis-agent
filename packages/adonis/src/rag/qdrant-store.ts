@@ -154,12 +154,26 @@ export class QdrantStore implements VectorStore {
 
   async search(embedding: number[], options: VectorSearchOptions): Promise<Passage[]> {
     const filter = buildQdrantFilter(options.filter);
+    // Euclid (`l2`) is Qdrant's one "smaller is better" metric — Cosine and Dot both order
+    // "larger is better", already matching the `VectorStore` contract (`score` higher-is-more-
+    // relevant), so only `l2` needs translating. Confirmed against Qdrant's docs
+    // (https://qdrant.tech/documentation/concepts/search/ and the API reference mirror at
+    // https://qdrant-qdrant-18.mintlify.app/concepts/distance-metrics): Euclid uses `Order::SmallBetter`,
+    // and `score_threshold` is checked as `score < threshold` for that ordering — i.e. it's an UPPER
+    // bound on distance (points farther than the threshold are excluded), the mirror image of Cosine's
+    // lower bound on similarity.
+    const isL2 = this.metric === 'l2';
     const result = await this.client.query(this.collection, {
       query: embedding,
       limit: options.topK,
       with_payload: true,
       ...(filter !== undefined ? { filter } : {}),
-      ...(options.minScore !== undefined ? { score_threshold: options.minScore } : {}),
+      // `minScore` is a floor on the (higher-is-better) Passage.score. For l2, score = -distance, so
+      // `score >= minScore` <=> `distance <= -minScore` — negate to get the Qdrant (max-distance)
+      // threshold. Cosine/inner already return higher-is-better scores, so minScore passes through.
+      ...(options.minScore !== undefined
+        ? { score_threshold: isL2 ? -options.minScore : options.minScore }
+        : {}),
     });
     return result.points.map((point) => {
       const payload = point.payload ?? {};
@@ -168,7 +182,9 @@ export class QdrantStore implements VectorStore {
       return {
         id: String(payload.id),
         text: String(payload.text),
-        score: point.score,
+        // Negate Euclid's raw distance (lower-is-better) so `score` stays higher-is-more-relevant,
+        // matching the `VectorStore` contract and mirroring PgVectorStore's `-(col <-> ?)` for l2.
+        score: isL2 ? -point.score : point.score,
         ...(source !== undefined && source !== null ? { source: String(source) } : {}),
         ...(metadata !== undefined && metadata !== null
           ? { metadata: metadata as Record<string, unknown> }
