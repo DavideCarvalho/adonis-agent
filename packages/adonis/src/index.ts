@@ -18,7 +18,12 @@ export * from './spi/embedding-provider.js';
 export * from './spi/retriever.js';
 export * from './spi/reranker.js';
 export * from './rag/index.js';
-export { QdrantStore, QdrantRetriever, chunkIdToPointId, buildQdrantFilter } from './rag/qdrant-store.js';
+export {
+  QdrantStore,
+  QdrantRetriever,
+  chunkIdToPointId,
+  buildQdrantFilter,
+} from './rag/qdrant-store.js';
 export type {
   QdrantClientLike,
   QdrantStoreOptions,

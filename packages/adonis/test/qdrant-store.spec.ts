@@ -131,11 +131,24 @@ describe('QdrantStore.search', () => {
     const client = new RecordingQdrantClient();
     client.queryResult = {
       points: [
-        { score: 0.71, payload: { id: 'doc-1#2', documentId: 'doc-1', text: 'trecho', source: 'Fonte A', metadata: { page: 5 } } },
+        {
+          score: 0.71,
+          payload: {
+            id: 'doc-1#2',
+            documentId: 'doc-1',
+            text: 'trecho',
+            source: 'Fonte A',
+            metadata: { page: 5 },
+          },
+        },
       ],
     };
     const store = new QdrantStore(client, { collection: 'rag', dimension: 3 });
-    const passages = await store.search([0.1, 0.2, 0.3], { topK: 8, minScore: 0.4, filter: { tenant: 't1' } });
+    const passages = await store.search([0.1, 0.2, 0.3], {
+      topK: 8,
+      minScore: 0.4,
+      filter: { tenant: 't1' },
+    });
 
     const [collection, args] = client.last('query') as [string, any];
     expect(collection).toBe('rag');
@@ -199,7 +212,12 @@ describe('QdrantRetriever', () => {
   it('embeda a query e busca na store (via client injetado)', async () => {
     const client = new RecordingQdrantClient();
     client.queryResult = {
-      points: [{ score: 0.9, payload: { id: 'd#0', documentId: 'd', text: 't', source: 'S', metadata: {} } }],
+      points: [
+        {
+          score: 0.9,
+          payload: { id: 'd#0', documentId: 'd', text: 't', source: 'S', metadata: {} },
+        },
+      ],
     };
     const store = new QdrantStore(client, { collection: 'rag', dimension: 8 });
     const retriever = new QdrantRetriever(new FakeEmbeddingProvider(8), store);

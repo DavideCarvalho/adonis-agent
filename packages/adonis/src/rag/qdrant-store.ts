@@ -87,9 +87,7 @@ export function buildQdrantFilter(
   if (filter === undefined || Object.keys(filter).length === 0) return undefined;
   const must: QdrantCondition[] = Object.entries(filter).map(([key, value]) => {
     const k = `metadata.${key}`;
-    return Array.isArray(value)
-      ? { key: k, match: { any: value } }
-      : { key: k, match: { value } };
+    return Array.isArray(value) ? { key: k, match: { any: value } } : { key: k, match: { value } };
   });
   return { must };
 }
@@ -221,6 +219,7 @@ export class QdrantStore implements VectorStore {
 /** Um {@link import('../spi/retriever.js').Retriever} sobre uma {@link QdrantStore}: embeda a query,
  *  depois busca no Qdrant. Gêmeo de `PgVectorRetriever`. */
 export class QdrantRetriever extends EmbeddingRetriever {
+  // biome-ignore lint/complexity/noUselessConstructor: not useless — it NARROWS `store` from the base's `VectorStore` to `QdrantStore`, which is this subclass's whole point. Delete it and `new QdrantRetriever(embedder, anyInMemoryStore)` starts compiling.
   constructor(embedder: EmbeddingProvider, store: QdrantStore) {
     super(embedder, store);
   }
