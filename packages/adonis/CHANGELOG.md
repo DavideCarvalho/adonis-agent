@@ -1,5 +1,11 @@
 # @adonis-agora/agent
 
+## 0.15.0
+
+### Minor Changes
+
+- Tool discovery now runs after `app.booted()` instead of during the provider's `boot()`. This lets `app/agent_tools` files use ordinary top-level imports of Adonis service singletons (e.g. `@adonisjs/lucid/services/db`) without the import throwing during boot (which, in a pruned production build, surfaced as `Cannot read properties of undefined (reading 'booted')` and left the tool missing). The tool registry is populated before the HTTP server accepts traffic, so no behavior changes for consumers.
+
 ## 0.14.0
 
 ### Minor Changes
