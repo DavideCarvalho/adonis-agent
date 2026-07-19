@@ -15,6 +15,11 @@ class RecordingQdrantClient implements QdrantClientLike {
   collections: string[] = [];
   queryResult: { points: unknown[] } = { points: [] };
   scrollResult: { points: unknown[]; next_page_offset?: unknown } = { points: [] };
+  /** Quando setado, sobrepõe `scrollResult` e decide a página a partir de `args.offset`
+   *  — permite testar paginação multi-página (offset ausente → página 1, presente → página 2+). */
+  scrollByOffset?: (args: {
+    offset?: unknown;
+  }) => { points: unknown[]; next_page_offset?: unknown };
 
   async getCollections() {
     this.calls.push({ method: 'getCollections', args: [] });
@@ -37,9 +42,9 @@ class RecordingQdrantClient implements QdrantClientLike {
     this.calls.push({ method: 'delete', args: [collection, args] });
     return {};
   }
-  async scroll(collection: string, args: unknown) {
+  async scroll(collection: string, args: { offset?: unknown }) {
     this.calls.push({ method: 'scroll', args: [collection, args] });
-    return this.scrollResult;
+    return this.scrollByOffset ? this.scrollByOffset(args) : this.scrollResult;
   }
   last(method: string) {
     const call = [...this.calls].reverse().find((c) => c.method === method);
@@ -231,6 +236,40 @@ describe('QdrantStore.listDocuments', () => {
     const [, args] = client.last('scroll') as [string, any];
     expect(args.with_payload).toBe(true);
     expect(args.with_vector).toBe(false);
+  });
+
+  it('pagina de verdade: encadeia offset entre páginas e dedupa a união', async () => {
+    const client = new RecordingQdrantClient();
+    const cursor = { some: 'cursor' };
+    client.scrollByOffset = (args) => {
+      if (args.offset === undefined) {
+        // página 1: doc-1 duplicado (deve dedupar), sinaliza que há mais.
+        return {
+          points: [
+            { payload: { documentId: 'doc-1', metadata: { title: 'A' } } },
+            { payload: { documentId: 'doc-1', metadata: { title: 'A' } } },
+          ],
+          next_page_offset: cursor,
+        };
+      }
+      // página 2: só é servida se o offset da página 1 foi encaminhado de volta.
+      expect(args.offset).toBe(cursor);
+      return {
+        points: [{ payload: { documentId: 'doc-2', metadata: { title: 'B' } } }],
+        next_page_offset: undefined,
+      };
+    };
+    const store = new QdrantStore(client, { collection: 'rag', dimension: 3 });
+    const docs = await store.listDocuments();
+
+    expect(docs).toEqual([
+      { id: 'doc-1', metadata: { title: 'A' } },
+      { id: 'doc-2', metadata: { title: 'B' } },
+    ]);
+    const scrollCalls = client.calls.filter((c) => c.method === 'scroll');
+    expect(scrollCalls).toHaveLength(2);
+    const [, secondArgs] = scrollCalls[1]?.args as [string, any];
+    expect(secondArgs.offset).toBe(cursor);
   });
 });
 

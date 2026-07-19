@@ -92,6 +92,10 @@ export function buildQdrantFilter(
   return { must };
 }
 
+/** Teto defensivo de páginas no scroll do `listDocuments` — protege contra um client mal
+ *  comportado cujo `next_page_offset` nunca vira null/undefined (paginação que não termina). */
+const MAX_SCROLL_PAGES = 10_000;
+
 /** Namespace UUID fixo da lib para derivar ids de ponto determinísticos (RFC 4122 §4.3). */
 const NAMESPACE = 'b9d5a5f2-1c3e-5e7a-9b2d-6f4c8a1e0d3b';
 
@@ -203,7 +207,10 @@ export class QdrantStore implements VectorStore {
     const seen = new Map<string, IndexedDocument>();
     let offset: unknown = undefined;
     // Pagina via scroll até esgotar. Corpus ~1500 chunks → poucas páginas.
-    for (;;) {
+    for (let pageCount = 0; ; pageCount++) {
+      if (pageCount >= MAX_SCROLL_PAGES) {
+        throw new Error('listDocuments: scroll excedeu MAX_SCROLL_PAGES (offset não terminou)');
+      }
       const page = await this.client.scroll(this.collection, {
         with_payload: true,
         with_vector: false,
