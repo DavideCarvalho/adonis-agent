@@ -18,6 +18,15 @@ export * from './spi/embedding-provider.js';
 export * from './spi/retriever.js';
 export * from './spi/reranker.js';
 export * from './rag/index.js';
+export { QdrantStore, QdrantRetriever, chunkIdToPointId, buildQdrantFilter } from './rag/qdrant-store.js';
+export type {
+  QdrantClientLike,
+  QdrantStoreOptions,
+  QdrantMetric,
+  QdrantPoint,
+  QdrantFilter,
+} from './rag/qdrant-store.js';
+export type { QdrantRetrieverConfig } from './stores/factory.js';
 export * from './rag-media/index.js';
 export * from './personas.js';
 export { AgentRegistry } from './agent-registry.js';

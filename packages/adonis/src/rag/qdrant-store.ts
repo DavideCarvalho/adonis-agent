@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
+import type { EmbeddingProvider } from '../spi/embedding-provider.js';
 import type { Passage } from '../spi/retriever.js';
+import { EmbeddingRetriever } from './embedding-retriever.js';
 import { documentIdOf } from './vector-store.js';
 import type {
   IndexedDocument,
@@ -213,5 +215,13 @@ export class QdrantStore implements VectorStore {
       offset = page.next_page_offset;
     }
     return [...seen.values()];
+  }
+}
+
+/** Um {@link import('../spi/retriever.js').Retriever} sobre uma {@link QdrantStore}: embeda a query,
+ *  depois busca no Qdrant. Gêmeo de `PgVectorRetriever`. */
+export class QdrantRetriever extends EmbeddingRetriever {
+  constructor(embedder: EmbeddingProvider, store: QdrantStore) {
+    super(embedder, store);
   }
 }

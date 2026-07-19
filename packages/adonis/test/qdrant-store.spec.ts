@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { QdrantStore, buildQdrantFilter, chunkIdToPointId } from '../src/rag/qdrant-store.js';
+import {
+  QdrantRetriever,
+  QdrantStore,
+  buildQdrantFilter,
+  chunkIdToPointId,
+} from '../src/rag/qdrant-store.js';
 import type { QdrantClientLike } from '../src/rag/qdrant-store.js';
+import { FakeEmbeddingProvider } from '../src/testing/index.js';
 
 /** Recording fake — captura toda chamada e devolve respostas canned. Prova que a
  *  store fala com o Qdrant do jeito certo SEM um Qdrant vivo (espelha RecordingDb). */
@@ -186,5 +192,21 @@ describe('QdrantStore.listDocuments', () => {
     const [, args] = client.last('scroll') as [string, any];
     expect(args.with_payload).toBe(true);
     expect(args.with_vector).toBe(false);
+  });
+});
+
+describe('QdrantRetriever', () => {
+  it('embeda a query e busca na store (via client injetado)', async () => {
+    const client = new RecordingQdrantClient();
+    client.queryResult = {
+      points: [{ score: 0.9, payload: { id: 'd#0', documentId: 'd', text: 't', source: 'S', metadata: {} } }],
+    };
+    const store = new QdrantStore(client, { collection: 'rag', dimension: 8 });
+    const retriever = new QdrantRetriever(new FakeEmbeddingProvider(8), store);
+    const passages = await retriever.retrieve('pergunta', { topK: 3, minScore: 0.5 });
+    expect(passages).toHaveLength(1);
+    const [, args] = client.last('query') as [string, any];
+    expect(args.limit).toBe(3);
+    expect(args.score_threshold).toBe(0.5);
   });
 });
