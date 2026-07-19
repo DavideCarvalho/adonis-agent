@@ -21,6 +21,13 @@ export interface QdrantStoreOptions {
   dimension?: number;
   /** Métrica de similaridade. Default `cosine`. */
   metric?: QdrantMetric;
+  /**
+   * Máximo de pontos por request de upsert. Fontes grandes viram MUITOS chunks (ex.: um PDF de
+   * ~200 páginas → ~700 pontos); enviar tudo num único request estoura o timeout default do client
+   * (`@qdrant/js-client-rest`, 300s) porque um corpo de vários MB estola no caminho. Fatiar em lotes
+   * mantém cada request pequeno e previsível. Default 100 (validado ~4-6s/lote de 100). 0/negativo → sem fatiamento.
+   */
+  upsertBatchSize?: number;
 }
 
 /** Ponto do Qdrant (id UUID, vetor, payload). */
@@ -121,6 +128,7 @@ export class QdrantStore implements VectorStore {
   private readonly collection: string;
   private readonly dimension: number;
   private readonly metric: QdrantMetric;
+  private readonly upsertBatchSize: number;
 
   constructor(
     private readonly client: QdrantClientLike,
@@ -129,6 +137,7 @@ export class QdrantStore implements VectorStore {
     this.collection = options.collection ?? 'agent_rag_chunks';
     this.dimension = options.dimension ?? 1536;
     this.metric = options.metric ?? 'cosine';
+    this.upsertBatchSize = options.upsertBatchSize ?? 100;
   }
 
   /** Idempotente: cria a collection (dimensão + métrica) se ainda não existir. */
@@ -153,7 +162,11 @@ export class QdrantStore implements VectorStore {
         ...(r.metadata !== undefined ? { metadata: r.metadata } : {}),
       },
     }));
-    await this.client.upsert(this.collection, { points });
+    // Fatiar em lotes: um request gigante estola no timeout de 300s do client (ver upsertBatchSize).
+    const step = this.upsertBatchSize > 0 ? this.upsertBatchSize : points.length;
+    for (let i = 0; i < points.length; i += step) {
+      await this.client.upsert(this.collection, { points: points.slice(i, i + step) });
+    }
   }
 
   async search(embedding: number[], options: VectorSearchOptions): Promise<Passage[]> {

@@ -108,6 +108,43 @@ describe('QdrantStore.upsert', () => {
       metadata: { page: 2 },
     });
   });
+
+  it('fatia records grandes em vários upserts (batch) preservando todos os pontos', async () => {
+    const client = new RecordingQdrantClient();
+    const store = new QdrantStore(client, { collection: 'rag', dimension: 1, upsertBatchSize: 2 });
+    const records = Array.from({ length: 5 }, (_, i) => ({
+      id: `doc-1#${i}`,
+      text: `t${i}`,
+      embedding: [i],
+    }));
+    await store.upsert(records);
+    const upserts = client.calls.filter((c) => c.method === 'upsert');
+    // 5 records, batch 2 → 3 requests (2 + 2 + 1)
+    expect(upserts.length).toBe(3);
+    const sizes = upserts.map((c) => (c.args[1] as { points: unknown[] }).points.length);
+    expect(sizes).toEqual([2, 2, 1]);
+    // nenhum lote excede o batch e todos os pontos aparecem exatamente uma vez
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(2);
+    const ids = upserts.flatMap((c) =>
+      (c.args[1] as { points: { id: string }[] }).points.map((p) => p.id),
+    );
+    expect(new Set(ids).size).toBe(5);
+    expect(ids).toEqual(records.map((r) => chunkIdToPointId(r.id)));
+  });
+
+  it('faz um único upsert quando cabe no batch', async () => {
+    const client = new RecordingQdrantClient();
+    const store = new QdrantStore(client, {
+      collection: 'rag',
+      dimension: 1,
+      upsertBatchSize: 100,
+    });
+    await store.upsert([
+      { id: 'a#0', text: 'a', embedding: [1] },
+      { id: 'a#1', text: 'b', embedding: [2] },
+    ]);
+    expect(client.calls.filter((c) => c.method === 'upsert').length).toBe(1);
+  });
 });
 
 describe('buildQdrantFilter', () => {
