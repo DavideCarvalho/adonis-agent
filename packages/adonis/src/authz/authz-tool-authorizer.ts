@@ -98,10 +98,11 @@ export class AuthzToolAuthorizer implements RolesPolicy {
  * ```ts
  * import { defineConfig } from '@adonis-agora/agent'
  * import { authzToolAuthorizer } from '@adonis-agora/agent/authz'
+ * import authz from '@adonis-agora/authz/services/main'
  *
  * export default defineConfig({
  *   model: () => aiSdkModel({ model: '...' }),
- *   authorizer: authzToolAuthorizer({ authz: await app.container.make('authz.service') }),
+ *   authorizer: authzToolAuthorizer({ authz }),
  * })
  * ```
  */
