@@ -155,7 +155,24 @@ export async function discoverTools(
     if (extname(entry) !== moduleExt || entry.endsWith(`.d${moduleExt}`)) {
       continue;
     }
-    const mod = (await import(pathToFileURL(join(dir, entry)).href)) as Record<string, unknown>;
+    // Import each tool file in its own try/catch: a single file that throws at import time (e.g. a
+    // top-level `@adonisjs/*/services/*` singleton whose `app` is undefined during boot) must NOT abort
+    // the whole scan and silently leave the agent with ZERO tools. Log it loudly and skip — the other
+    // tools still register, and the failure is visible instead of surfacing as the model "narrating"
+    // tool calls it was never given.
+    let mod: Record<string, unknown>;
+    try {
+      mod = (await import(pathToFileURL(join(dir, entry)).href)) as Record<string, unknown>;
+    } catch (err) {
+      const logger = (app as { logger?: { error?: (...args: unknown[]) => void } } | undefined)?.logger;
+      const message = `@adonis-agora/agent: failed to import tool file "${entry}" during discovery — skipping it (the agent will run WITHOUT this tool until the import is fixed).`;
+      if (logger?.error) {
+        logger.error({ err }, message);
+      } else {
+        console.error(message, err);
+      }
+      continue;
+    }
     for (const exported of Object.values(mod)) {
       if (seen.has(exported)) {
         continue;
