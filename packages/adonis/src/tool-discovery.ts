@@ -164,7 +164,8 @@ export async function discoverTools(
     try {
       mod = (await import(pathToFileURL(join(dir, entry)).href)) as Record<string, unknown>;
     } catch (err) {
-      const logger = (app as { logger?: { error?: (...args: unknown[]) => void } } | undefined)?.logger;
+      const logger = (app as { logger?: { error?: (...args: unknown[]) => void } } | undefined)
+        ?.logger;
       const message = `@adonis-agora/agent: failed to import tool file "${entry}" during discovery — skipping it (the agent will run WITHOUT this tool until the import is fixed).`;
       if (logger?.error) {
         logger.error({ err }, message);
