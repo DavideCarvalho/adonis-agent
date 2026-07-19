@@ -176,11 +176,42 @@ export class QdrantStore implements VectorStore {
       };
     });
   }
-  // remove / listDocuments — Task 3.
-  async remove(_documentId: string): Promise<void> {
-    throw new Error('not implemented (Task 3)');
+  async remove(documentId: string): Promise<void> {
+    await this.client.delete(this.collection, {
+      filter: { must: [{ key: 'documentId', match: { value: documentId } }] },
+    });
   }
-  async listDocuments(_filter?: Record<string, unknown>): Promise<IndexedDocument[]> {
-    throw new Error('not implemented (Task 3)');
+
+  async listDocuments(filter?: Record<string, unknown>): Promise<IndexedDocument[]> {
+    const qFilter = buildQdrantFilter(filter);
+    const seen = new Map<string, IndexedDocument>();
+    let offset: unknown = undefined;
+    // Pagina via scroll até esgotar. Corpus ~1500 chunks → poucas páginas.
+    for (;;) {
+      const page = await this.client.scroll(this.collection, {
+        with_payload: true,
+        with_vector: false,
+        limit: 256,
+        ...(qFilter !== undefined ? { filter: qFilter } : {}),
+        ...(offset !== undefined ? { offset } : {}),
+      });
+      for (const point of page.points) {
+        const payload = point.payload ?? {};
+        const docId = payload.documentId;
+        if (docId === undefined || docId === null) continue;
+        const id = String(docId);
+        if (seen.has(id)) continue;
+        const metadata = payload.metadata;
+        seen.set(id, {
+          id,
+          ...(metadata !== undefined && metadata !== null
+            ? { metadata: metadata as Record<string, unknown> }
+            : {}),
+        });
+      }
+      if (page.next_page_offset === undefined || page.next_page_offset === null) break;
+      offset = page.next_page_offset;
+    }
+    return [...seen.values()];
   }
 }

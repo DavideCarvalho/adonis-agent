@@ -154,3 +154,37 @@ describe('QdrantStore.search', () => {
     expect(args.limit).toBe(5);
   });
 });
+
+describe('QdrantStore.remove', () => {
+  it('deleta por filtro em documentId', async () => {
+    const client = new RecordingQdrantClient();
+    const store = new QdrantStore(client, { collection: 'rag', dimension: 3 });
+    await store.remove('doc-1');
+    const [collection, args] = client.last('delete') as [string, any];
+    expect(collection).toBe('rag');
+    expect(args.filter).toEqual({ must: [{ key: 'documentId', match: { value: 'doc-1' } }] });
+  });
+});
+
+describe('QdrantStore.listDocuments', () => {
+  it('faz scroll, dedupa por documentId e traz metadata representativo', async () => {
+    const client = new RecordingQdrantClient();
+    client.scrollResult = {
+      points: [
+        { payload: { documentId: 'doc-1', metadata: { title: 'A' } } },
+        { payload: { documentId: 'doc-1', metadata: { title: 'A' } } },
+        { payload: { documentId: 'doc-2', metadata: { title: 'B' } } },
+      ],
+      next_page_offset: undefined,
+    };
+    const store = new QdrantStore(client, { collection: 'rag', dimension: 3 });
+    const docs = await store.listDocuments();
+    expect(docs).toEqual([
+      { id: 'doc-1', metadata: { title: 'A' } },
+      { id: 'doc-2', metadata: { title: 'B' } },
+    ]);
+    const [, args] = client.last('scroll') as [string, any];
+    expect(args.with_payload).toBe(true);
+    expect(args.with_vector).toBe(false);
+  });
+});
