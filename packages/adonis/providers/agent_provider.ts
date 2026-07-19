@@ -117,12 +117,24 @@ export default class AgentProvider {
     const defaultRoles = config.defaultRoles ?? ['ADMIN'];
 
     // ── Tool discovery: generated barrel first, else the app/agent_tools readdir fallback ──
+    // Deferred to `app.booted()` because discovery IMPORTS each tool file, running its top-level
+    // side effects. A tool that imports an Adonis service singleton at module top (e.g.
+    // `@adonisjs/lucid/services/db`) evaluates it right here — and during `boot()` that singleton's
+    // own `app` can still be uninitialized (notably in a pruned production build, surfacing as
+    // `Cannot read properties of undefined (reading 'booted')`), so the import throws. The per-file
+    // guard in `discoverTools` now turns that into a skipped tool rather than zero tools, but the
+    // tool is still MISSING. Importing after the app is booted lets those top-level service
+    // singletons resolve, so tools may use ordinary top-level imports. Safe to populate here: the
+    // registry is a container singleton captured by the deps factory (built below) and read
+    // per-request, and `booted` callbacks run before the HTTP server accepts traffic.
     const barrel = await this.#loadGeneratedToolsBarrel();
-    if (barrel) {
-      await registerToolsFromBarrel(registry, barrel, defaultRoles, this.app);
-    } else {
-      await discoverTools(registry, this.app.makePath('app/agent_tools'), defaultRoles, this.app);
-    }
+    this.app.booted(async () => {
+      if (barrel) {
+        await registerToolsFromBarrel(registry, barrel, defaultRoles, this.app);
+      } else {
+        await discoverTools(registry, this.app.makePath('app/agent_tools'), defaultRoles, this.app);
+      }
+    });
     // Config-level functional tools (defineTool), then synthesized delegate tools.
     for (const tool of config.tools ?? []) {
       registerFunctionalTool(registry, tool, defaultRoles);
