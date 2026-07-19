@@ -1,6 +1,7 @@
 import type { ApplicationService } from '@adonisjs/core/types';
 import type { IngestDocument } from '../rag/ingest.js';
 import type { PgVectorColumns, PgVectorMetric } from '../rag/pg-vector-store.js';
+import type { QdrantClientLike, QdrantMetric } from '../rag/qdrant-store.js';
 import type { RedisStreamClient } from '../redis-stream-client.js';
 import type { ActorDirectory } from '../spi/actor-directory.js';
 import type { AgentStore } from '../spi/agent-store.js';
@@ -377,6 +378,27 @@ export interface PgVectorRetrieverConfig {
   overlap?: number;
 }
 
+/** Options for the Qdrant-backed retriever (production RAG over a managed vector DB, e.g. GuaraCloud). */
+export interface QdrantRetrieverConfig {
+  /** Embedder (ou factory lazy) — mesmo padrão de `pgvector`/`memory`. */
+  embedder: EmbeddingProvider | (() => Promise<EmbeddingProvider>);
+  /** URL do Qdrant (usado quando `client` não é passado). */
+  url?: string;
+  /** API key do Qdrant (opcional). */
+  apiKey?: string;
+  /** Client estrutural pronto — para uso programático/testes; se ausente, monta do `url`/`apiKey`. */
+  client?: QdrantClientLike;
+  collection?: string;
+  dimension?: number;
+  metric?: QdrantMetric;
+  /** Provisiona a collection (dim/métrica) no boot — útil p/ testes/ingestão. */
+  ensureCollection?: boolean;
+  /** Documentos p/ ingestão no boot (opcional, mesmo padrão de `pgvector`). */
+  documents?: IngestDocument[];
+  chunkSize?: number;
+  overlap?: number;
+}
+
 /**
  * The retriever factory namespace used in `config/agent.ts`, mirroring {@link stores}:
  *
@@ -451,6 +473,46 @@ export const retrievers = {
         });
       }
       return new PgVectorRetriever(embedder, store);
+    };
+  },
+
+  /**
+   * Retriever de produção sobre o Qdrant — cosine/dot/euclid via `@qdrant/js-client-rest`. O client
+   * é importado LAZY dentro do thunk (a menos que um `client` estrutural seja passado), então o pacote
+   * fica peer OPCIONAL. Passe `ensureCollection: true` p/ provisionar a collection no boot.
+   */
+  qdrant(config: QdrantRetrieverConfig): RetrieverFactory {
+    return async () => {
+      const { QdrantStore, QdrantRetriever } = await import('../rag/qdrant-store.js');
+      const { ingestDocuments } = await import('../rag/ingest.js');
+      const embedder =
+        typeof config.embedder === 'function' ? await config.embedder() : config.embedder;
+      const client =
+        config.client ??
+        (await (async () => {
+          const mod = await import('@qdrant/js-client-rest');
+          return new mod.QdrantClient({
+            url: config.url ?? 'http://localhost:6333',
+            ...(config.apiKey !== undefined ? { apiKey: config.apiKey } : {}),
+          }) as unknown as QdrantClientLike;
+        })());
+      const store = new QdrantStore(client, {
+        ...(config.collection !== undefined ? { collection: config.collection } : {}),
+        ...(config.dimension !== undefined ? { dimension: config.dimension } : {}),
+        ...(config.metric !== undefined ? { metric: config.metric } : {}),
+      });
+      if (config.ensureCollection === true) {
+        await store.ensureCollection();
+      }
+      if (config.documents !== undefined && config.documents.length > 0) {
+        await ingestDocuments(config.documents, {
+          embedder,
+          store,
+          ...(config.chunkSize !== undefined ? { chunkSize: config.chunkSize } : {}),
+          ...(config.overlap !== undefined ? { overlap: config.overlap } : {}),
+        });
+      }
+      return new QdrantRetriever(embedder, store);
     };
   },
 };
