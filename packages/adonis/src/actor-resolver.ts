@@ -1,5 +1,19 @@
 import type { ActorResolver } from './spi/actor-resolver.js';
-import type { Actor } from './types.js';
+import type { Actor, AgentDefinition } from './types.js';
+
+/**
+ * Pick the effective {@link ActorResolver} for a turn: an agent's own `actorResolver` (from its
+ * {@link AgentDefinition}) wins over the module-global resolver, letting different agents read the
+ * caller from different places (e.g. one that reads the actor from the HTTP body). Falls back to
+ * `globalResolver` when the agent is unknown (`undefined` definition) or declares none — identical to
+ * the single-resolver behavior before per-agent overrides existed.
+ */
+export function resolveActorResolver(
+  globalResolver: ActorResolver,
+  definition: Pick<AgentDefinition, 'actorResolver'> | undefined,
+): ActorResolver {
+  return definition?.actorResolver ?? globalResolver;
+}
 
 /**
  * The default {@link ActorResolver} the provider installs when `config/agent.ts` sets no

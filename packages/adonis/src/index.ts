@@ -132,6 +132,7 @@ export {
   UnconfiguredActorResolver,
   HeaderActorResolver,
   AuthActorResolver,
+  resolveActorResolver,
 } from './actor-resolver.js';
 export type { AuthActorResolverOptions } from './actor-resolver.js';
 export { AgentService } from './agent-service.js';

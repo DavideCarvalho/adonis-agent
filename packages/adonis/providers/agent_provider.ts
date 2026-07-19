@@ -38,6 +38,7 @@ import {
   registerDelegateTools,
   registerFunctionalTool,
   registerToolsFromBarrel,
+  resolveActorResolver,
 } from '../src/index.js';
 
 interface ChatBody {
@@ -178,6 +179,7 @@ export default class AgentProvider {
       config,
       service,
       actorResolver,
+      agents,
       attachmentStaging,
       governance,
       config.governanceAuthorize,
@@ -352,6 +354,7 @@ export default class AgentProvider {
     config: AgentConfig,
     service: AgentService,
     actorResolver: ActorResolver,
+    agents: AgentRegistry,
     attachmentStaging: AttachmentStagingStore | undefined,
     governance: AgentGovernanceQueries | undefined,
     governanceAuthorize: AgentGovernanceAuthorize | undefined,
@@ -359,6 +362,7 @@ export default class AgentProvider {
     const router = await this.app.container.make('router');
     const path = (config.path ?? 'agent').replace(/^\/+|\/+$/g, '');
     const p = (suffix: string) => `${path}/${suffix}`;
+    const defaultAgentName = config.defaultAgent?.name ?? 'default';
 
     // 1. POST /agent/chat — resolve actor, start the run, SSE-pipe the token stream. When the caller
     // continues an EXISTING thread (`body.threadId`), it must own it: otherwise an authenticated caller
@@ -366,9 +370,13 @@ export default class AgentProvider {
     // back over SSE) and append its own turn into the victim's thread. A new-thread chat (no threadId)
     // has no owner to check. Owner-scoped exactly like the `threads/:id` routes.
     router.post(p('chat'), async (ctx: HttpContext) => {
-      const actor = await this.#resolveActor(ctx, actorResolver);
-      if (actor === null) return;
+      // Read the body first so the target agent is known: an agent with its own `actorResolver`
+      // (e.g. one that reads the caller from the body) resolves the actor with it, else the global.
       const body = (ctx.request.body() ?? {}) as ChatBody;
+      const agentName = body.agent ?? defaultAgentName;
+      const resolver = resolveActorResolver(actorResolver, agents.get(agentName));
+      const actor = await this.#resolveActor(ctx, resolver);
+      if (actor === null) return;
       if (body.threadId !== undefined) {
         const owner = await service.threadOwner(body.threadId);
         if (!(await this.#assertOwner(ctx, actor, owner, 'thread', governanceAuthorize))) return;

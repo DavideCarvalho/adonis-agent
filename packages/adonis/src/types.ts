@@ -1,4 +1,5 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec';
+import type { ActorResolver } from './spi/actor-resolver.js';
 
 /** Who is driving the turn. Roles + tenant come from the host app (nestjs-context/authz). */
 export interface Actor {
@@ -210,6 +211,13 @@ export interface AgentDefinition {
   defaultPersona?: string;
   modelId?: string;
   maxSteps?: number;
+  /**
+   * Per-agent {@link ActorResolver} override. When set, this agent resolves the request's actor with
+   * its own resolver instead of the module-global `config.actorResolver` — e.g. an agent that reads
+   * the caller from the HTTP body rather than the session. Falls back to the global resolver when
+   * unset, so agents without one behave exactly as before. Same type as the global resolver.
+   */
+  actorResolver?: ActorResolver;
 }
 
 export interface ThreadSummary {
