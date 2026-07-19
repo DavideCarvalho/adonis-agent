@@ -1,5 +1,11 @@
 # @adonis-agora/agent
 
+## 0.16.0
+
+### Minor Changes
+
+- [#34](https://github.com/DavideCarvalho/adonis-agent/pull/34) [`5afc7e5`](https://github.com/DavideCarvalho/adonis-agent/commit/5afc7e5cab6de57abc8662e70fc4c72476015c96) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Adiciona um backend Qdrant (`QdrantStore implements VectorStore`) ao lado do pgvector, com a factory `retrievers.qdrant({ embedder, url, apiKey, collection, dimension, metric })`. O `@qdrant/js-client-rest` é peer dependency opcional (import lazy). Contratos `Passage`/`VectorStore` inalterados; uma collection só com filtro de payload (a mesma semântica de ACL por token do pgvector), id de chunk mapeado para UUIDv5 no ponto.
+
 ## 0.15.0
 
 ### Minor Changes
