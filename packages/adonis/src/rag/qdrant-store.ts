@@ -72,6 +72,26 @@ export interface QdrantClientLike {
   ): Promise<{ points: { payload?: Record<string, unknown> }[]; next_page_offset?: unknown }>;
 }
 
+/**
+ * Traduz o filtro de metadata (`Record<string, unknown>`) para um {@link QdrantFilter}, preservando a
+ * semântica de ACL por token: scalar = match exato; array = match-any (set membership; casa o
+ * `jsonb_exists_any` do pgvector — o `any` do Qdrant testa interseção com campo scalar OU array);
+ * array vazio = nega tudo (`any: []` nunca casa). Chaves miram `metadata.<k>` (o payload aninha o
+ * metadata sob `metadata`). Múltiplas chaves entram em `must` (AND). Vazio/ausente → undefined.
+ */
+export function buildQdrantFilter(
+  filter: Record<string, unknown> | undefined,
+): QdrantFilter | undefined {
+  if (filter === undefined || Object.keys(filter).length === 0) return undefined;
+  const must: QdrantCondition[] = Object.entries(filter).map(([key, value]) => {
+    const k = `metadata.${key}`;
+    return Array.isArray(value)
+      ? { key: k, match: { any: value } }
+      : { key: k, match: { value } };
+  });
+  return { must };
+}
+
 /** Namespace UUID fixo da lib para derivar ids de ponto determinísticos (RFC 4122 §4.3). */
 const NAMESPACE = 'b9d5a5f2-1c3e-5e7a-9b2d-6f4c8a1e0d3b';
 
@@ -132,10 +152,31 @@ export class QdrantStore implements VectorStore {
     await this.client.upsert(this.collection, { points });
   }
 
-  // search / remove / listDocuments — Tasks 2 e 3.
-  async search(_embedding: number[], _options: VectorSearchOptions): Promise<Passage[]> {
-    throw new Error('not implemented (Task 2)');
+  async search(embedding: number[], options: VectorSearchOptions): Promise<Passage[]> {
+    const filter = buildQdrantFilter(options.filter);
+    const result = await this.client.query(this.collection, {
+      query: embedding,
+      limit: options.topK,
+      with_payload: true,
+      ...(filter !== undefined ? { filter } : {}),
+      ...(options.minScore !== undefined ? { score_threshold: options.minScore } : {}),
+    });
+    return result.points.map((point) => {
+      const payload = point.payload ?? {};
+      const source = payload.source;
+      const metadata = payload.metadata;
+      return {
+        id: String(payload.id),
+        text: String(payload.text),
+        score: point.score,
+        ...(source !== undefined && source !== null ? { source: String(source) } : {}),
+        ...(metadata !== undefined && metadata !== null
+          ? { metadata: metadata as Record<string, unknown> }
+          : {}),
+      };
+    });
   }
+  // remove / listDocuments — Task 3.
   async remove(_documentId: string): Promise<void> {
     throw new Error('not implemented (Task 3)');
   }

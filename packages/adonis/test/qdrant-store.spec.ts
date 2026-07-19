@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { QdrantStore, chunkIdToPointId } from '../src/rag/qdrant-store.js';
+import { QdrantStore, buildQdrantFilter, chunkIdToPointId } from '../src/rag/qdrant-store.js';
 import type { QdrantClientLike } from '../src/rag/qdrant-store.js';
 
 /** Recording fake — captura toda chamada e devolve respostas canned. Prova que a
@@ -96,5 +96,61 @@ describe('QdrantStore.upsert', () => {
       source: 'Fonte A',
       metadata: { page: 2 },
     });
+  });
+});
+
+describe('buildQdrantFilter', () => {
+  it('scalar → match value; array → match any; múltiplas chaves → must', () => {
+    expect(buildQdrantFilter({ tenant: 't1', audience: ['public', 'role:ADMIN'] })).toEqual({
+      must: [
+        { key: 'metadata.tenant', match: { value: 't1' } },
+        { key: 'metadata.audience', match: { any: ['public', 'role:ADMIN'] } },
+      ],
+    });
+  });
+  it('array vazio → condição que nega tudo', () => {
+    // `match.except` com o próprio universo é impraticável; usamos `any: []`, que nunca casa.
+    expect(buildQdrantFilter({ audience: [] })).toEqual({
+      must: [{ key: 'metadata.audience', match: { any: [] } }],
+    });
+  });
+  it('filtro vazio/ausente → undefined', () => {
+    expect(buildQdrantFilter(undefined)).toBeUndefined();
+    expect(buildQdrantFilter({})).toBeUndefined();
+  });
+});
+
+describe('QdrantStore.search', () => {
+  it('passa limit/score_threshold/filter e mapeia pontos para Passage (id do payload)', async () => {
+    const client = new RecordingQdrantClient();
+    client.queryResult = {
+      points: [
+        { score: 0.71, payload: { id: 'doc-1#2', documentId: 'doc-1', text: 'trecho', source: 'Fonte A', metadata: { page: 5 } } },
+      ],
+    };
+    const store = new QdrantStore(client, { collection: 'rag', dimension: 3 });
+    const passages = await store.search([0.1, 0.2, 0.3], { topK: 8, minScore: 0.4, filter: { tenant: 't1' } });
+
+    const [collection, args] = client.last('query') as [string, any];
+    expect(collection).toBe('rag');
+    expect(args.query).toEqual([0.1, 0.2, 0.3]);
+    expect(args.limit).toBe(8);
+    expect(args.score_threshold).toBe(0.4);
+    expect(args.with_payload).toBe(true);
+    expect(args.filter).toEqual({ must: [{ key: 'metadata.tenant', match: { value: 't1' } }] });
+
+    expect(passages).toEqual([
+      { id: 'doc-1#2', text: 'trecho', score: 0.71, source: 'Fonte A', metadata: { page: 5 } },
+    ]);
+  });
+
+  it('sem filtro/minScore não envia esses campos', async () => {
+    const client = new RecordingQdrantClient();
+    const store = new QdrantStore(client, { collection: 'rag', dimension: 3 });
+    await store.search([0, 0, 0], { topK: 5 });
+    const [, args] = client.last('query') as [string, any];
+    expect('filter' in args).toBe(false);
+    expect('score_threshold' in args).toBe(false);
+    expect(args.limit).toBe(5);
   });
 });
