@@ -156,7 +156,9 @@ describe('PgVectorStore.search — similarity SQL + bindings', () => {
     await store.search(EMBEDDING, { topK: 4, filter: { tenantRef: 't1' }, minScore: 0.5 });
 
     const { sql, bindings } = db.last;
-    expect(flat(sql)).toContain('WHERE metadata @> ?::jsonb AND 1 - (embedding <=> ?::vector) >= ?');
+    expect(flat(sql)).toContain(
+      'WHERE metadata @> ?::jsonb AND 1 - (embedding <=> ?::vector) >= ?',
+    );
     expect(bindings).toEqual([
       VECTOR_LITERAL,
       '{"tenantRef":"t1"}',

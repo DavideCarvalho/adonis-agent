@@ -1,5 +1,11 @@
 # @adonis-agora/agent
 
+## 0.14.0
+
+### Minor Changes
+
+- Add `RetrieveOptions.minScore` — a relevance floor applied to vector-store retrieval (passages with `score < minScore` are dropped before the top-K cut), enabling strict-grounding RAG. Also add per-agent `AgentDefinition.actorResolver`, letting an individual agent resolve its request actor differently from the global `config.actorResolver` (the per-agent resolver is preferred when present, falling back to the global otherwise).
+
 ## 0.13.3
 
 ### Patch Changes
