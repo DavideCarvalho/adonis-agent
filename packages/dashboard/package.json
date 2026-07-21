@@ -33,6 +33,7 @@
   "sideEffects": false,
   "scripts": {
     "build": "vite build && tsc -p tsconfig.json",
+    "prepack": "pnpm run build",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.app.json --noEmit"
