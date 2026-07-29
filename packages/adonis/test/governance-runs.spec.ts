@@ -260,7 +260,7 @@ describe('run read-model — Lucid (SQLite)', () => {
     db = await makeStoreDb();
   });
   afterEach(async () => {
-    await db.manager.closeAll();
+    await db?.manager.closeAll();
   });
 
   runContract('lucid', async () => {

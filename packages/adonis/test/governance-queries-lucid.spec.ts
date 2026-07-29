@@ -97,7 +97,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await db.manager.closeAll();
+  await db?.manager.closeAll();
 });
 
 describe('LucidGovernanceQueries', () => {

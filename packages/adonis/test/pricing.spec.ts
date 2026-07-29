@@ -75,7 +75,7 @@ describe('LucidPricingStore', () => {
   });
 
   afterEach(async () => {
-    await db.manager.closeAll();
+    await db?.manager.closeAll();
   });
 
   it('atomically supersedes: only one is_current row survives per model', async () => {

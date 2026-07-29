@@ -62,7 +62,7 @@ describe('LedgerQuotaStore (Lucid ledger)', () => {
   });
 
   afterEach(async () => {
-    await db.manager.closeAll();
+    await db?.manager.closeAll();
   });
 
   it("reads today's tokens from the append-only token-usage table (cache tokens never re-added)", async () => {

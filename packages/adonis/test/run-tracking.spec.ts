@@ -71,7 +71,7 @@ describe('run tracking — inline runner (Lucid)', () => {
     gov = new LucidGovernanceQueries(asStoreDb(db));
   });
   afterEach(async () => {
-    await db.manager.closeAll();
+    await db?.manager.closeAll();
   });
 
   it('creates a run at start and finalizes it completed with the rollup', async () => {
