@@ -120,9 +120,9 @@ export default defineConfig({
 
 Its type is `AgentGovernanceAuthorize = (actor, ctx) => boolean | Promise<boolean>`, and it is applied by the router-free `evaluateGovernanceGate` (also exported), which is **fail-closed**: an `authorize` that *throws* denies with `403` (and surfaces the message), exactly like a `false` return.
 
-- **Omit it** and any resolved (authenticated) actor may read the governance read-model — the historical behavior, correct only when every authenticated caller is trusted staff. The provider logs a startup warning when the governance routes are mounted without a gate.
-- The gate **does not** cover `GET /agent/approvals/mine`, which is always scoped to the calling actor's own pending approvals — so a non-admin surface can poll its own approvals even while the cross-actor read-model is ADMIN-only.
-- The same predicate also feeds the object-level ownership check above: passing `governanceAuthorize` is what makes a caller `privileged` (may act across actors). It mirrors [`@adonis-agora/agent-dashboard`](/docs/agent/governance/dashboard)'s `authorize` hook, so the JSON routes and the console SPA that reads them can be gated with the *same* predicate.
+- **Omit it** and `/agent/governance/*` is **not mounted at all** — every one of those paths answers `404`, so an ungated cross-actor read-model can never be served by accident. The provider logs a boot warning naming both ways forward: set the gate (typically an ADMIN check) to mount the routes gated, or `governanceAuthorize: () => true` to deliberately restore the old behaviour of letting ANY authenticated actor read them.
+- The gate **does not** cover `GET /agent/approvals/mine`, which is **unaffected** — it stays mounted whenever the read-model resolves, gate or no gate, and is always scoped to the calling actor's own pending approvals, so a non-admin surface can poll its own approvals even while the cross-actor read-model is ADMIN-only.
+- The same predicate also feeds the object-level ownership check above: passing `governanceAuthorize` is what makes a caller `privileged` (may act across actors). It mirrors [`@adonis-agora/agent-dashboard`](/docs/agent/governance/dashboard)'s `authorize` hook, so the JSON routes and the console SPA that reads them can be gated with the *same* predicate — and because the console is a pure consumer of those routes, it **refuses to mount** without this gate too.
 
 ## What governance covers
 

@@ -6,7 +6,7 @@ icon: MessageSquareText
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
-The provider mounts eleven core routes under `config.path` (default `agent`) at boot. They cover the full chat lifecycle — start, stream, cancel, HITL, threads, and quota. No controllers to write; the provider resolves the actor, calls the framework-agnostic `AgentService`, and pipes the SSE. Three optional route groups mount only when their config is present: `POST /agent/attachments` (when `attachmentStaging` is set — see [Attachments](/docs/agent/authoring/attachments)), `GET /agent/approvals/mine` and the `/agent/governance/*` read routes (both when `governanceQueries` is set — see [Governance read-model](/docs/agent/governance/read-model)).
+The provider mounts eleven core routes under `config.path` (default `agent`) at boot. They cover the full chat lifecycle — start, stream, cancel, HITL, threads, and quota. No controllers to write; the provider resolves the actor, calls the framework-agnostic `AgentService`, and pipes the SSE. Three optional route groups mount only when their config is present: `POST /agent/attachments` (when `attachmentStaging` is set — see [Attachments](/docs/agent/authoring/attachments)), `GET /agent/approvals/mine` (when `governanceQueries` is set), and the cross-actor `/agent/governance/*` read routes (when `governanceQueries` is set **and** a `governanceAuthorize` gate is configured — without the gate they are **not mounted at all** and answer `404`; see [Governance read-model](/docs/agent/governance/read-model)).
 
 ## The routes
 
