@@ -13,6 +13,7 @@ import type {
   LucidInsertBuilderLike,
   LucidQueryBuilderLike,
   QdrantClientLike,
+  QdrantFilter,
 } from '../src/index.js';
 
 /** Recording {@link LucidDatabaseLike} — mirrors the one in pg-vector-store.spec.ts. */
@@ -76,12 +77,17 @@ class FakeQdrantClient implements QdrantClientLike {
   async scroll(
     collection: string,
     args: {
-      filter?: { must?: { key: string; match: { value?: unknown } }[] };
+      filter?: QdrantFilter;
+      with_payload: boolean | string[];
       with_vector: boolean;
+      limit: number;
+      offset?: unknown;
     },
   ) {
     this.calls.push({ method: 'scroll', args: [collection, args] });
-    const wanted = args.filter?.must?.find((c) => c.key === 'documentId')?.match.value;
+    const condition = args.filter?.must?.find((c) => c.key === 'documentId');
+    const wanted =
+      condition !== undefined && 'value' in condition.match ? condition.match.value : undefined;
     const points = [...this.points.entries()]
       .filter(([, p]) => wanted === undefined || p.payload.documentId === wanted)
       .map(([, p]) => ({
@@ -103,7 +109,7 @@ class FakeQdrantClient implements QdrantClientLike {
     }
     return {};
   }
-  count(method: string): number {
+  callCount(method: string): number {
     return this.calls.filter((c) => c.method === method).length;
   }
   lastArgs(method: string): unknown[] {
@@ -356,8 +362,8 @@ describe('QdrantStore.updateMetadata', () => {
   it('writes via setPayload — never upsert — and returns the chunk count', async () => {
     const { client, store } = await seeded();
     expect(await store.updateMetadata('doc1', { audience: 'role:ADMIN' })).toBe(2);
-    expect(client.count('upsert')).toBe(0);
-    expect(client.count('setPayload')).toBe(1); // one write: both chunks land on the same metadata
+    expect(client.callCount('upsert')).toBe(0);
+    expect(client.callCount('setPayload')).toBe(1); // one write: both chunks land on the same metadata
     const [, args] = client.lastArgs('setPayload');
     expect(args).toMatchObject({
       payload: { metadata: { audience: 'role:ADMIN', rev: 1 } },
@@ -417,13 +423,13 @@ describe('QdrantStore.updateMetadata', () => {
     client.calls.length = 0;
     expect(await store.updateMetadata('doc1', { audience: 'x' })).toBe(2);
     // Different `rev` per chunk → two distinct outcomes → two writes.
-    expect(client.count('setPayload')).toBe(2);
+    expect(client.callCount('setPayload')).toBe(2);
   });
 
   it('returns 0 for an unknown document and for an empty patch, touching the client only for the former', async () => {
     const { client, store } = await seeded();
     expect(await store.updateMetadata('nope', { a: 1 })).toBe(0);
-    expect(client.count('setPayload')).toBe(0);
+    expect(client.callCount('setPayload')).toBe(0);
     client.calls.length = 0;
     expect(await store.updateMetadata('doc1', { a: undefined })).toBe(0);
     expect(client.calls).toHaveLength(0); // no round trip at all for a no-op patch
@@ -437,6 +443,6 @@ describe('QdrantStore.updateMetadata', () => {
     const store = new QdrantStore(noSetPayload, { collection: 'rag', dimension: 4 });
     await expect(store.updateMetadata('doc1', { a: 1 })).rejects.toThrow(/setPayload/);
     // It did NOT silently fall back to upsert (which would rewrite the embedding).
-    expect(client.count('upsert')).toBe(0);
+    expect(client.callCount('upsert')).toBe(0);
   });
 });

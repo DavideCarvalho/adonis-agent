@@ -213,4 +213,71 @@ describe.skipIf(CONTAINER === undefined)('PgVectorStore against a live Postgres 
     expect(admin.map((p) => p.id).sort()).toEqual(['alpha#0', 'alpha#1', 'beta#0']);
     expect(await store.search(A, { topK: 10, filter: { audience: ['public'] } })).toEqual([]);
   });
+
+  const FILTERS: Record<string, unknown>[] = [
+    { audience: ['public'] },
+    { audience: ['public', 'role:ADMIN'] },
+    { rev: 1 },
+    { audience: ['public'], rev: 1 },
+    { audience: ['nobody'] },
+    { missing: 'x' },
+    { audience: [] },
+    { audience: [], rev: 1 },
+  ];
+
+  it('listDocumentIds matches listDocuments for the same filter, on real SQL', async () => {
+    await seed();
+    for (const filter of [undefined, {}, ...FILTERS]) {
+      const ids = await store.listDocumentIds(filter);
+      const docs = await store.listDocuments(filter);
+      expect([...ids].sort(), `filter=${JSON.stringify(filter)}`).toEqual(
+        docs.map((d) => d.id).sort(),
+      );
+    }
+  }, 120_000);
+
+  it('removeWhere removes exactly what search reaches with the same filter, and nothing else', async () => {
+    for (const filter of FILTERS) {
+      await seed();
+      const all = (await store.search(A, { topK: 100 })).map((p) => p.id).sort();
+      const reachable = (await store.search(A, { topK: 100, filter })).map((p) => p.id).sort();
+
+      const removed = await store.removeWhere(filter);
+
+      const survivors = (await store.search(A, { topK: 100 })).map((p) => p.id).sort();
+      const label = `filter=${JSON.stringify(filter)}`;
+      expect(removed, label).toBe(reachable.length);
+      expect(survivors, label).toEqual(all.filter((id) => !reachable.includes(id)));
+    }
+  }, 180_000);
+
+  it("the empty-array deny is honoured by the SQL ITSELF, not only by the store's short-circuit", async () => {
+    await seed();
+    // `removeWhere` short-circuits before emitting SQL, so run the predicate `buildMetadataWhere`
+    // produces for that filter directly. `WHERE false` is what search emits too, and it deletes nothing.
+    const rows = (await db.rawQuery(`DELETE FROM ${TABLE} WHERE false RETURNING id`)) as {
+      id: string;
+    }[];
+    expect(rows).toEqual([]);
+    const remaining = (await db.rawQuery(`SELECT count(*)::int AS n FROM ${TABLE}`)) as {
+      n: number;
+    }[];
+    expect(remaining[0]!.n).toBe(3);
+  });
+
+  it('removeWhere refuses an empty filter instead of truncating the table', async () => {
+    await seed();
+    await expect(store.removeWhere({})).rejects.toThrow(/empty filter/i);
+    const remaining = (await db.rawQuery(`SELECT count(*)::int AS n FROM ${TABLE}`)) as {
+      n: number;
+    }[];
+    expect(remaining[0]!.n).toBe(3);
+  });
+
+  it('removeWhere is a single round trip that both deletes and counts', async () => {
+    await seed();
+    const before = db.statements.length;
+    expect(await store.removeWhere({ audience: ['public'] })).toBe(2);
+    expect(db.statements.length - before).toBe(1);
+  });
 });

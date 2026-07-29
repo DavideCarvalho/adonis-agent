@@ -79,6 +79,101 @@ export interface VectorStore {
    * All three stores this package ships implement it.
    */
   updateMetadata?(documentId: string, patch: MetadataPatch): Promise<number>;
+  /**
+   * OPTIONAL capability. The distinct source document ids currently indexed, optionally narrowed by a
+   * metadata `filter` — {@link VectorStore.listDocuments} without the metadata.
+   *
+   * Use it when the id set is all you need: a reconciliation diff against your source of truth, a count,
+   * a delete list. `listDocuments` has to fetch and JSON-parse a metadata blob **per chunk** just to
+   * collapse it to one entry per document, which on a large corpus is most of its cost; implementations
+   * here are expected to skip that entirely (a `SELECT DISTINCT` of the id expression, a scroll that
+   * transfers one payload key).
+   *
+   * Filter semantics are **identical to {@link VectorStore.search}** — same builder, empty-array deny
+   * included, so an empty-array value yields `[]`.
+   *
+   * Optional so a host-written store still compiles; feature-detect with `store.listDocumentIds?.(…)`.
+   */
+  listDocumentIds?(filter?: Record<string, unknown>): Promise<string[]>;
+  /**
+   * OPTIONAL capability. Delete every chunk matching a metadata `filter` in ONE store round trip, and
+   * resolve the number of **chunks** removed.
+   *
+   * The collection-maintenance primitive: dropping a collection, evicting a tenant, purging a retired
+   * audience. Without it, doing any of those means `listDocuments()` — which materialises per-chunk
+   * metadata only to collapse it — followed by one {@link VectorStore.remove} per document, so N+1 round
+   * trips where one filtered delete would do. (That the Qdrant adapter already needed a defensive page
+   * cap on its `listDocuments` scroll is the tell: the enumeration API was being used for something it is
+   * not shaped for.)
+   *
+   * **What it removes is exactly what a {@link VectorStore.search} carrying the same filter could
+   * reach** — every implementation here builds the delete predicate with the very same filter builder its
+   * `search` uses, so the two cannot drift. It is chunk-scoped, like `search`: for any corpus built by
+   * {@link import('./ingest.js').chunkDocuments} — which stamps the document's metadata on every chunk —
+   * that is the same thing as whole documents. In the pathological case where chunks of one document
+   * carry *different* metadata, this removes the matching chunks and leaves the rest, which is the safe
+   * direction: it can never remove more than the filter reaches.
+   *
+   * Two guard rails, because this is the only method here that destroys data:
+   *
+   * - **The empty-array deny is honoured, and it means "delete nothing".** `removeWhere({ audience: [] })`
+   *   removes zero chunks, exactly as a search with that filter returns none. Treating a deny as "no
+   *   filter" would delete the whole corpus — precisely inverted from what the caller asked for.
+   * - **The filter must be non-empty.** `removeWhere({})` throws {@link UnsafeRemovalError} instead of
+   *   wiping the store, because an empty object is overwhelmingly more likely to be a filter that got
+   *   built wrong (a dropped key, an `undefined` scope that vanished on serialisation) than a deliberate
+   *   request to delete everything. Deliberate mass deletion stays available and stays explicit: loop
+   *   {@link VectorStore.remove} over {@link VectorStore.listDocumentIds}, or use the backend's own drop.
+   *
+   * Optional so a host-written store still compiles; feature-detect with `store.removeWhere?.(…)`.
+   */
+  removeWhere?(filter: Record<string, unknown>): Promise<number>;
+}
+
+/**
+ * A destructive call was refused because its scope could not be trusted. Thrown by
+ * {@link VectorStore.removeWhere} — never for a filter that merely matched nothing (that is a legitimate
+ * result of `0`), only for one that would have deleted *more* than the caller plausibly meant.
+ */
+export class UnsafeRemovalError extends Error {
+  constructor(
+    /** Why the removal was refused. */
+    readonly reason: 'empty-filter',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'UnsafeRemovalError';
+  }
+}
+
+/**
+ * Guard for {@link VectorStore.removeWhere}: refuse a filter that scopes nothing. Shared so all three
+ * stores refuse the same input with the same error, rather than each deciding for itself how much of the
+ * corpus an empty object means.
+ */
+export function assertRemovalFilter(filter: Record<string, unknown>): void {
+  if (Object.keys(filter).length === 0) {
+    throw new UnsafeRemovalError(
+      'empty-filter',
+      'removeWhere refused an empty filter: it would delete every chunk in the store, which is far ' +
+        'more likely to be a filter built wrong than a deliberate request. For a deliberate wipe, ' +
+        'loop `remove` over `listDocumentIds()`, or drop the table/collection.',
+    );
+  }
+}
+
+/**
+ * Does this filter deny everything? True when any key carries an **empty array** — no value is a member
+ * of the empty set, so nothing can match (see {@link import('./filter.js').matchesFilter}).
+ *
+ * Every filter builder in this package already encodes that (`matchesFilter` returns false,
+ * `buildMetadataWhere` emits a `false` clause, `buildQdrantFilter` emits `any: []`), and the live specs
+ * confirm the backends agree. {@link VectorStore.removeWhere} checks it anyway and short-circuits before
+ * issuing anything: for the one operation where misreading a deny as "no filter" destroys the corpus, the
+ * deny should not depend on a backend's interpretation of an empty set.
+ */
+export function filterDeniesAll(filter: Record<string, unknown>): boolean {
+  return Object.values(filter).some((value) => Array.isArray(value) && value.length === 0);
 }
 
 /**

@@ -2,7 +2,7 @@ import type { EmbeddingProvider } from '../spi/embedding-provider.js';
 import type { Passage } from '../spi/retriever.js';
 import type { LucidDatabaseLike } from '../stores/lucid.js';
 import { EmbeddingRetriever } from './embedding-retriever.js';
-import { effectivePatchKeys } from './vector-store.js';
+import { assertRemovalFilter, effectivePatchKeys, filterDeniesAll } from './vector-store.js';
 import type {
   IndexedDocument,
   MetadataPatch,
@@ -344,6 +344,46 @@ export class PgVectorStore implements VectorStore {
         ...(metadata !== undefined ? { metadata } : {}),
       };
     });
+  }
+
+  /**
+   * {@link VectorStore.listDocumentIds} — `SELECT DISTINCT` of the document-id expression. Unlike
+   * {@link PgVectorStore.listDocuments} it never selects the `jsonb` metadata column, so Postgres does not
+   * transfer it and {@link parseMetadata} is never called: on a large corpus that is most of the cost.
+   * The `WHERE` comes from the same {@link buildMetadataWhere} `search` uses.
+   */
+  async listDocumentIds(filter?: Record<string, unknown>): Promise<string[]> {
+    const docExpr = documentIdExpr(this.col.id);
+    const where = buildMetadataWhere(filter, this.col.metadata);
+    const raw = await this.db.rawQuery(
+      `SELECT DISTINCT ${docExpr} AS doc_id
+         FROM ${this.table}
+         ${where.sql}
+        ORDER BY doc_id`,
+      where.bindings,
+    );
+    return normalizeRows(raw).map((row) => String(row.doc_id));
+  }
+
+  /**
+   * {@link VectorStore.removeWhere} — one `DELETE … RETURNING`, so the chunk count comes back from the
+   * same statement that does the deleting: no count-then-delete, no race between the two, one round trip.
+   *
+   * Filter parity with {@link PgVectorStore.search} is by construction — the `WHERE` fragment is produced
+   * by the identical {@link buildMetadataWhere} call, so an empty-array value emits the same `false`
+   * clause here as it does there, and a scalar the same `@> ?::jsonb` containment.
+   */
+  async removeWhere(filter: Record<string, unknown>): Promise<number> {
+    assertRemovalFilter(filter);
+    if (filterDeniesAll(filter)) {
+      return 0;
+    }
+    const where = buildMetadataWhere(filter, this.col.metadata);
+    const raw = await this.db.rawQuery(
+      `DELETE FROM ${this.table} ${where.sql} RETURNING ${this.col.id} AS id`,
+      where.bindings,
+    );
+    return normalizeRows(raw).length;
   }
 
   async search(embedding: number[], options: VectorSearchOptions): Promise<Passage[]> {

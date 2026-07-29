@@ -29,7 +29,7 @@ describe.skipIf(URL === undefined)('QdrantStore against a live Qdrant', () => {
   let store: QdrantStore;
 
   beforeAll(async () => {
-    raw = new QdrantClient({ url: URL });
+    raw = new QdrantClient({ url: String(URL) });
     client = raw as unknown as QdrantClientLike;
     store = new QdrantStore(client, { collection: COLLECTION, dimension: DIM });
     await store.ensureCollection();
@@ -127,5 +127,64 @@ describe.skipIf(URL === undefined)('QdrantStore against a live Qdrant', () => {
   it('updateMetadata on an unknown document returns 0', async () => {
     await seed();
     expect(await store.updateMetadata('nope', { a: 1 })).toBe(0);
+  });
+
+  it('listDocumentIds matches listDocuments for the same filter', async () => {
+    await seed();
+    for (const filter of [
+      undefined,
+      {},
+      { audience: ['public'] },
+      { audience: ['role:ADMIN'] },
+      { rev: 1 },
+      { audience: ['nobody'] },
+      { audience: [] },
+      { audience: [], rev: 1 },
+    ]) {
+      const ids = await store.listDocumentIds(filter);
+      const docs = await store.listDocuments(filter);
+      expect([...ids].sort(), `filter=${JSON.stringify(filter)}`).toEqual(
+        docs.map((d) => d.id).sort(),
+      );
+    }
+  });
+
+  it('an empty-array filter denies on the live server for search AND for removeWhere', async () => {
+    await seed();
+    // This is the assertion a fake cannot make: that Qdrant itself treats `any: []` as "matches
+    // nothing" rather than erroring or matching everything.
+    expect(await store.search(A, { topK: 10, filter: { audience: [] } })).toEqual([]);
+    expect(await store.listDocumentIds({ audience: [] })).toEqual([]);
+    expect(await store.removeWhere({ audience: [] })).toBe(0);
+    expect(await store.removeWhere({ audience: [], rev: 1 })).toBe(0);
+    expect(await store.search(A, { topK: 10, filter: { audience: [], rev: 1 } })).toEqual([]);
+    // Nothing was removed.
+    expect((await raw.count(COLLECTION, { exact: true })).count).toBe(3);
+  });
+
+  it('removeWhere removes exactly what search with the same filter reaches, and nothing else', async () => {
+    await seed();
+    const reachable = await store.search(A, { topK: 100, filter: { audience: ['public'] } });
+    expect(reachable.map((p) => p.id).sort()).toEqual(['alpha#0', 'alpha#1']);
+
+    const removed = await store.removeWhere({ audience: ['public'] });
+    expect(removed).toBe(2);
+
+    expect((await raw.count(COLLECTION, { exact: true })).count).toBe(1);
+    const survivors = await store.search(C, { topK: 100 });
+    expect(survivors.map((p) => p.id)).toEqual(['beta#0']);
+  });
+
+  it('removeWhere refuses an empty filter instead of wiping the collection', async () => {
+    await seed();
+    await expect(store.removeWhere({})).rejects.toThrow(/empty filter/i);
+    expect((await raw.count(COLLECTION, { exact: true })).count).toBe(3);
+  });
+
+  it('removeMany-by-enumeration still works: listDocumentIds then removeWhere on a scoping key', async () => {
+    await seed();
+    expect((await store.listDocumentIds()).sort()).toEqual(['alpha', 'beta']);
+    expect(await store.removeWhere({ rev: 1 })).toBe(3);
+    expect(await store.listDocumentIds()).toEqual([]);
   });
 });

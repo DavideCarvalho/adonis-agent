@@ -2,7 +2,13 @@ import { createHash } from 'node:crypto';
 import type { EmbeddingProvider } from '../spi/embedding-provider.js';
 import type { Passage } from '../spi/retriever.js';
 import { EmbeddingRetriever } from './embedding-retriever.js';
-import { applyMetadataPatch, documentIdOf, effectivePatchKeys } from './vector-store.js';
+import {
+  applyMetadataPatch,
+  assertRemovalFilter,
+  documentIdOf,
+  effectivePatchKeys,
+  filterDeniesAll,
+} from './vector-store.js';
 import type {
   IndexedDocument,
   MetadataPatch,
@@ -69,7 +75,7 @@ export interface QdrantClientLike {
       score_threshold?: number;
     },
   ): Promise<{ points: { score: number; payload?: Record<string, unknown> }[] }>;
-  delete(collection: string, args: { filter: QdrantFilter }): Promise<unknown>;
+  delete(collection: string, args: { filter: QdrantFilter; wait?: boolean }): Promise<unknown>;
   scroll(
     collection: string,
     args: {
@@ -98,6 +104,16 @@ export interface QdrantClientLike {
       wait?: boolean;
     },
   ): Promise<unknown>;
+  /**
+   * Count the points matching a filter WITHOUT transferring them. Backs the chunk count
+   * {@link QdrantStore.removeWhere} resolves to — Qdrant's delete response carries no count, and this is
+   * an aggregate, not an enumeration: no payloads, no vectors, one cheap round trip. Optional for the
+   * same reason as {@link QdrantClientLike.setPayload}; the real `@qdrant/js-client-rest` provides it.
+   */
+  count?(
+    collection: string,
+    args: { filter?: QdrantFilter; exact?: boolean },
+  ): Promise<{ count: number }>;
 }
 
 /**
@@ -314,6 +330,77 @@ export class QdrantStore implements VectorStore {
       });
     }
     return written;
+  }
+
+  /**
+   * {@link VectorStore.listDocumentIds} — the same scroll {@link QdrantStore.listDocuments} does, but
+   * transferring ONE payload key (`documentId`) instead of the whole payload, so the per-chunk metadata
+   * blob never crosses the wire or gets parsed. Qdrant has no `DISTINCT`, so the collapse still happens
+   * here; what this saves is the payload, which is the bulk of it. Filter comes from the same
+   * {@link buildQdrantFilter} `search` uses.
+   */
+  async listDocumentIds(filter?: Record<string, unknown>): Promise<string[]> {
+    const qFilter = buildQdrantFilter(filter);
+    const ids = new Set<string>();
+    let offset: unknown = undefined;
+    for (let pageCount = 0; ; pageCount++) {
+      if (pageCount >= MAX_SCROLL_PAGES) {
+        throw new Error('listDocumentIds: scroll excedeu MAX_SCROLL_PAGES (offset não terminou)');
+      }
+      const page = await this.client.scroll(this.collection, {
+        with_payload: ['documentId'],
+        with_vector: false,
+        limit: 256,
+        ...(qFilter !== undefined ? { filter: qFilter } : {}),
+        ...(offset !== undefined ? { offset } : {}),
+      });
+      for (const point of page.points) {
+        const docId = point.payload?.documentId;
+        if (docId === undefined || docId === null) continue;
+        ids.add(String(docId));
+      }
+      if (page.next_page_offset === undefined || page.next_page_offset === null) break;
+      offset = page.next_page_offset;
+    }
+    return [...ids];
+  }
+
+  /**
+   * {@link VectorStore.removeWhere} — ONE filtered `delete`, no enumeration: Qdrant deletes by filter
+   * server-side, so this never scrolls the points it is about to remove.
+   *
+   * Filter parity with {@link QdrantStore.search} is by construction — the same
+   * {@link buildQdrantFilter} call produces the predicate for both, so `metadata.<k>` keying, scalar
+   * `match.value`, array `match.any` set-membership and the empty-array deny are the same object here as
+   * there.
+   *
+   * It DOES cost one extra round trip that memory and pgvector do not: Qdrant's delete response carries
+   * no count, so the chunk count comes from a preceding `count` (an aggregate — no payloads, no vectors,
+   * not an enumeration). Consequence worth knowing: the count is taken just before the delete, so under
+   * concurrent writes it is a very slightly stale count of what matched, where memory and pgvector return
+   * an exact count from the deleting statement itself. The delete is filter-scoped either way; only the
+   * reported number can drift.
+   */
+  async removeWhere(filter: Record<string, unknown>): Promise<number> {
+    assertRemovalFilter(filter);
+    if (filterDeniesAll(filter)) {
+      return 0;
+    }
+    const count = this.client.count?.bind(this.client);
+    if (count === undefined) {
+      throw new Error(
+        'QdrantStore.removeWhere requires a client with `count` (the real @qdrant/js-client-rest has ' +
+          'it) to report how many chunks it removed, because Qdrant’s delete response carries no count.',
+      );
+    }
+    const qFilter = buildQdrantFilter(filter);
+    if (qFilter === undefined) {
+      // Unreachable: assertRemovalFilter already rejected the only input that yields undefined.
+      throw new Error('removeWhere: filtro vazio escapou do assertRemovalFilter');
+    }
+    const { count: matched } = await count(this.collection, { filter: qFilter, exact: true });
+    await this.client.delete(this.collection, { filter: qFilter, wait: true });
+    return matched;
   }
 
   async listDocuments(filter?: Record<string, unknown>): Promise<IndexedDocument[]> {

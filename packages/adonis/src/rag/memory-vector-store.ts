@@ -7,8 +7,10 @@ import {
   type VectorSearchOptions,
   type VectorStore,
   applyMetadataPatch,
+  assertRemovalFilter,
   documentIdOf,
   effectivePatchKeys,
+  filterDeniesAll,
 } from './vector-store.js';
 
 /**
@@ -69,6 +71,42 @@ export class MemoryVectorStore implements VectorStore {
       }
     }
     return [...documents.values()];
+  }
+
+  /**
+   * {@link VectorStore.listDocumentIds} — the ids `listDocuments` would report, without building the
+   * per-document metadata entries. Filtering goes through the same {@link matchesFilter} `search` uses.
+   */
+  async listDocumentIds(filter?: Record<string, unknown>): Promise<string[]> {
+    const ids = new Set<string>();
+    for (const record of this.records.values()) {
+      if (filter !== undefined && !matchesFilter(record.metadata, filter)) {
+        continue;
+      }
+      ids.add(documentIdOf(record.id));
+    }
+    return [...ids];
+  }
+
+  /**
+   * {@link VectorStore.removeWhere} — delete every chunk the same filter would let `search` reach.
+   * Parity is by construction: the predicate below is the identical {@link matchesFilter} call, on the
+   * identical argument, as the one in {@link MemoryVectorStore.search}.
+   */
+  async removeWhere(filter: Record<string, unknown>): Promise<number> {
+    assertRemovalFilter(filter);
+    if (filterDeniesAll(filter)) {
+      return 0;
+    }
+    let removed = 0;
+    for (const [id, record] of [...this.records]) {
+      if (!matchesFilter(record.metadata, filter)) {
+        continue;
+      }
+      this.records.delete(id);
+      removed += 1;
+    }
+    return removed;
   }
 
   async search(embedding: number[], options: VectorSearchOptions): Promise<Passage[]> {
