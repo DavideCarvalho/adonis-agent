@@ -42,6 +42,7 @@ async function bootApp(options: {
   governanceAuthorize?: AgentGovernanceAuthorize;
   dashboardAuthorize?: AgentDashboardAuthorize;
   dashboardEnabled?: boolean;
+  governanceQueries?: false;
 }): Promise<BootedApp> {
   const ignitor = new IgnitorFactory()
     .withCoreProviders()
@@ -56,6 +57,7 @@ async function bootApp(options: {
           ...(options.governanceAuthorize !== undefined
             ? { governanceAuthorize: options.governanceAuthorize }
             : {}),
+          ...(options.governanceQueries === false ? { governanceQueries: false as const } : {}),
           dashboard: {
             ...(options.dashboardEnabled !== undefined
               ? { enabled: options.dashboardEnabled }
@@ -154,5 +156,29 @@ describe('dashboard mount vs. the agent governance gate', () => {
     const response = await fetch(`${booted.url}/agent/dashboard`);
     expect(response.status).toBe(404);
     expect(warnings().filter((text) => text.includes('agent-dashboard'))).toEqual([]);
+  });
+
+  // The second door to the same broken console: a gate IS configured, so the previous check passes,
+  // but `governanceQueries: false` means the read-model was never built — so the cross-actor routes
+  // do not exist and every panel but Quota would 404 anyway. Note `governanceQueries: undefined` is
+  // NOT this case: the agent provider defaults it to the Lucid read-model when the main store is
+  // Lucid (`agent_provider.ts` `#resolveGovernance`), so only an explicit `false` is decidable from
+  // config alone.
+  it('does not mount when governanceQueries is false, even with a gate configured', async () => {
+    booted = await bootApp({ governanceAuthorize: adminOnly, governanceQueries: false });
+
+    const response = await fetch(`${booted.url}/agent/dashboard`);
+    expect(response.status, 'GET /agent/dashboard').toBe(404);
+  });
+
+  // The operator must be able to tell the two causes apart from the log alone — a generic
+  // "governance is not configured" would recreate the diagnosability problem this check exists for.
+  it('names governanceQueries — not the gate — as the cause in the boot warning', async () => {
+    booted = await bootApp({ governanceAuthorize: adminOnly, governanceQueries: false });
+
+    const mine = warnings().filter((text) => text.includes('agent-dashboard'));
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toContain('governanceQueries');
+    expect(mine[0]).not.toContain('no `governanceAuthorize` gate is configured');
   });
 });
