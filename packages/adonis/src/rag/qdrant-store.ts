@@ -2,9 +2,10 @@ import { createHash } from 'node:crypto';
 import type { EmbeddingProvider } from '../spi/embedding-provider.js';
 import type { Passage } from '../spi/retriever.js';
 import { EmbeddingRetriever } from './embedding-retriever.js';
-import { documentIdOf } from './vector-store.js';
+import { applyMetadataPatch, documentIdOf, effectivePatchKeys } from './vector-store.js';
 import type {
   IndexedDocument,
+  MetadataPatch,
   VectorRecord,
   VectorSearchOptions,
   VectorStore,
@@ -73,12 +74,30 @@ export interface QdrantClientLike {
     collection: string,
     args: {
       filter?: QdrantFilter;
-      with_payload: boolean;
+      /** `true` for the whole payload, or a key list to transfer only those keys. */
+      with_payload: boolean | string[];
       with_vector: boolean;
       limit: number;
       offset?: unknown;
     },
   ): Promise<{ points: { payload?: Record<string, unknown> }[]; next_page_offset?: unknown }>;
+  /**
+   * Set payload keys on specific points, leaving every other key — and **the vector** — alone. Backs
+   * {@link QdrantStore.updateMetadata}; the real `@qdrant/js-client-rest` provides it.
+   *
+   * OPTIONAL here, mirroring the `expire?` precedent on this package's Redis client shim, so adding it
+   * cannot break a host that hand-rolled this structural interface. `updateMetadata` throws a named
+   * error rather than degrading if it is absent: the alternative degradation would be scroll-with-vector
+   * plus `upsert`, which rewrites the embedding — the exact thing the method promises not to do.
+   */
+  setPayload?(
+    collection: string,
+    args: {
+      payload: Record<string, unknown>;
+      points: string[];
+      wait?: boolean;
+    },
+  ): Promise<unknown>;
 }
 
 /**
@@ -213,6 +232,88 @@ export class QdrantStore implements VectorStore {
     await this.client.delete(this.collection, {
       filter: { must: [{ key: 'documentId', match: { value: documentId } }] },
     });
+  }
+
+  /**
+   * {@link VectorStore.updateMetadata} — rewrite every chunk's metadata for one document, touching
+   * neither `text` nor the **vector**.
+   *
+   * Qdrant is the one adapter here that cannot do the merge server-side. `set_payload` merges at the TOP
+   * level of a point's payload, and this store nests the caller's metadata one level down (under
+   * `metadata`, so a filter key is `metadata.<k>` — see {@link buildQdrantFilter}), so a top-level set of
+   * `metadata` replaces the whole object rather than merging into it. The merge therefore happens in JS:
+   * scroll the document's points for their current metadata, apply the shared
+   * {@link import('./vector-store.js').applyMetadataPatch}, write back. Cost: one scroll (payload only,
+   * **`with_vector: false`**, and only the two keys needed) plus one `set_payload` per distinct resulting
+   * metadata — which is ONE for any corpus built by `chunkDocuments`, since that stamps the same document
+   * metadata on every chunk.
+   *
+   * The vector is untouched by construction, not by care: `set_payload` has no vector field, and the
+   * points are never re-`upsert`ed (upsert is the call that would carry a vector). The scroll does not
+   * even fetch the vectors, so this method never has one in hand to write back.
+   *
+   * Point ids are re-derived with {@link chunkIdToPointId} from the chunk id in the payload, so the
+   * scroll needs no point id from the response and this store keeps working against a client whose
+   * `scroll` returns only payloads.
+   *
+   * `wait: true` because the returned count is a claim that the writes landed; Qdrant's default is to
+   * acknowledge before applying.
+   */
+  async updateMetadata(documentId: string, patch: MetadataPatch): Promise<number> {
+    if (effectivePatchKeys(patch).length === 0) {
+      return 0;
+    }
+    const setPayload = this.client.setPayload?.bind(this.client);
+    if (setPayload === undefined) {
+      throw new Error(
+        'QdrantStore.updateMetadata requires a client with `setPayload` (the real ' +
+          '@qdrant/js-client-rest has it). Refusing to fall back to upsert, which would rewrite the ' +
+          'embedding this method exists to preserve.',
+      );
+    }
+    // Group by the RESULTING metadata so identical outcomes share one write — the normal case.
+    const groups = new Map<string, { metadata: Record<string, unknown>; points: string[] }>();
+    let written = 0;
+    let offset: unknown = undefined;
+    for (let pageCount = 0; ; pageCount++) {
+      if (pageCount >= MAX_SCROLL_PAGES) {
+        throw new Error('updateMetadata: scroll excedeu MAX_SCROLL_PAGES (offset não terminou)');
+      }
+      const page = await this.client.scroll(this.collection, {
+        filter: { must: [{ key: 'documentId', match: { value: documentId } }] },
+        with_payload: ['id', 'metadata'],
+        with_vector: false,
+        limit: 256,
+        ...(offset !== undefined ? { offset } : {}),
+      });
+      for (const point of page.points) {
+        const payload = point.payload ?? {};
+        const chunkId = payload.id;
+        if (chunkId === undefined || chunkId === null) continue;
+        const current = payload.metadata;
+        const next = applyMetadataPatch(
+          current !== undefined && current !== null
+            ? (current as Record<string, unknown>)
+            : undefined,
+          patch,
+        );
+        const key = JSON.stringify(next);
+        const group = groups.get(key) ?? { metadata: next, points: [] };
+        group.points.push(chunkIdToPointId(String(chunkId)));
+        groups.set(key, group);
+        written += 1;
+      }
+      if (page.next_page_offset === undefined || page.next_page_offset === null) break;
+      offset = page.next_page_offset;
+    }
+    for (const group of groups.values()) {
+      await setPayload(this.collection, {
+        payload: { metadata: group.metadata },
+        points: group.points,
+        wait: true,
+      });
+    }
+    return written;
   }
 
   async listDocuments(filter?: Record<string, unknown>): Promise<IndexedDocument[]> {

@@ -1,7 +1,10 @@
 export { chunkText, type ChunkOptions } from './chunk.js';
 export {
+  applyMetadataPatch,
   documentIdOf,
+  effectivePatchKeys,
   type IndexedDocument,
+  type MetadataPatch,
   type VectorRecord,
   type VectorSearchOptions,
   type VectorStore,

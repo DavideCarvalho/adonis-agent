@@ -2,10 +2,13 @@ import type { Passage } from '../spi/retriever.js';
 import { matchesFilter } from './filter.js';
 import {
   type IndexedDocument,
+  type MetadataPatch,
   type VectorRecord,
   type VectorSearchOptions,
   type VectorStore,
+  applyMetadataPatch,
   documentIdOf,
+  effectivePatchKeys,
 } from './vector-store.js';
 
 /**
@@ -27,6 +30,28 @@ export class MemoryVectorStore implements VectorStore {
         this.records.delete(id);
       }
     }
+  }
+
+  /**
+   * {@link VectorStore.updateMetadata} — rewrite every chunk's metadata for one document, touching
+   * neither `text` nor `embedding`. Both are carried across by the spread, so the stored `embedding`
+   * stays the **same array instance** it was upserted with: nothing here can perturb a vector even in
+   * principle. Merge semantics come from the shared {@link applyMetadataPatch}, so this adapter cannot
+   * drift from the other two.
+   */
+  async updateMetadata(documentId: string, patch: MetadataPatch): Promise<number> {
+    if (effectivePatchKeys(patch).length === 0) {
+      return 0;
+    }
+    let written = 0;
+    for (const [id, record] of this.records) {
+      if (documentIdOf(id) !== documentId) {
+        continue;
+      }
+      this.records.set(id, { ...record, metadata: applyMetadataPatch(record.metadata, patch) });
+      written += 1;
+    }
+    return written;
   }
 
   async listDocuments(filter?: Record<string, unknown>): Promise<IndexedDocument[]> {

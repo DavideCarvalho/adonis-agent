@@ -2,8 +2,10 @@ import type { EmbeddingProvider } from '../spi/embedding-provider.js';
 import type { Passage } from '../spi/retriever.js';
 import type { LucidDatabaseLike } from '../stores/lucid.js';
 import { EmbeddingRetriever } from './embedding-retriever.js';
+import { effectivePatchKeys } from './vector-store.js';
 import type {
   IndexedDocument,
+  MetadataPatch,
   VectorRecord,
   VectorSearchOptions,
   VectorStore,
@@ -283,6 +285,45 @@ export class PgVectorStore implements VectorStore {
     await this.db.rawQuery(`DELETE FROM ${this.table} WHERE ${documentIdExpr(this.col.id)} = ?`, [
       documentId,
     ]);
+  }
+
+  /**
+   * {@link VectorStore.updateMetadata} — one `UPDATE` for the whole document, with the
+   * {@link import('./vector-store.js').MetadataPatch} merge done **in Postgres** rather than read back
+   * into JS: `(COALESCE(metadata, '{}') || <set>) - <removed keys>`. `||` is jsonb concatenation, which
+   * at the top level is exactly a shallow merge (right-hand keys win, wholesale); `jsonb - text[]`
+   * removes keys, which is how a `null` in the patch deletes. So there is no read-modify-write and no
+   * lost-update window between a `SELECT` and an `UPDATE`.
+   *
+   * The embedding is untouched **structurally**: `SET` names only the metadata column, so no statement
+   * this method can emit is capable of writing `embedding` or `text`. The row is not re-inserted, so
+   * pgvector never re-parses a vector literal either.
+   *
+   * `RETURNING` the id column yields the chunk count without a second query.
+   */
+  async updateMetadata(documentId: string, patch: MetadataPatch): Promise<number> {
+    const keys = effectivePatchKeys(patch);
+    if (keys.length === 0) {
+      return 0;
+    }
+    const set: Record<string, unknown> = {};
+    const removed: string[] = [];
+    for (const key of keys) {
+      if (patch[key] === null) {
+        removed.push(key);
+      } else {
+        set[key] = patch[key];
+      }
+    }
+    const c = this.col;
+    const raw = await this.db.rawQuery(
+      `UPDATE ${this.table}
+          SET ${c.metadata} = (COALESCE(${c.metadata}, '{}'::jsonb) || ?::jsonb) - ?::text[]
+        WHERE ${documentIdExpr(c.id)} = ?
+        RETURNING ${c.id} AS id`,
+      [JSON.stringify(set), removed, documentId],
+    );
+    return normalizeRows(raw).length;
   }
 
   async listDocuments(filter?: Record<string, unknown>): Promise<IndexedDocument[]> {
