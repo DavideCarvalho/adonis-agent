@@ -105,6 +105,28 @@ describe('dataTool', () => {
     expect(runner.lastSql).not.toContain('base_id');
   });
 
+  it('does NOT let a tenant predicate under OR count as scope coverage (the OR bypass)', async () => {
+    const runner = new FakeRunner([{ id: 1 }]);
+    const tool = dataTool({
+      runner,
+      tableAccess,
+      tenant: { tenantColumn: 'base_id', scopedTables: ['vehicle'] },
+    });
+
+    await tool.handler.execute(
+      { sql: "SELECT id FROM vehicle WHERE base_id = 'tenant-abc' OR 1 = 1" },
+      ctx({ tenantRef: 'tenant-abc' }),
+    );
+
+    // The input SQL already contains one `tenant-abc` literal (inside the OR). A rewriter that
+    // (wrongly) treats that predicate as coverage adds nothing, so the literal still appears
+    // exactly once in the emitted SQL — `OR 1 = 1` still matches every tenant's rows. A rewriter
+    // that correctly refuses to treat an OR-side predicate as coverage ANDs its own tenant
+    // predicate onto the whole WHERE, so the literal appears TWICE.
+    const occurrences = (runner.lastSql?.match(/tenant-abc/g) ?? []).length;
+    expect(occurrences).toBe(2);
+  });
+
   it('does NOT treat a null tenantRef as privileged (injects a fail-closed predicate)', async () => {
     const runner = new FakeRunner([{ id: 1 }]);
     const tool = dataTool({

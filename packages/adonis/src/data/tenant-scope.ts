@@ -28,6 +28,18 @@ interface BinaryExpr {
   operator: string;
   left: unknown;
   right: unknown;
+  /**
+   * node-sql-parser only wraps a subexpression in `(...)` on print when this flag is set on it —
+   * it is NOT inferred from tree shape. Load-bearing for {@link TenantScopeRewriter.andCondition}:
+   * this parser's printer renders `AND`/`OR` at the SAME precedence, left-to-right, when this flag
+   * is absent (verified directly: `x = 1 OR x = 2 AND y = 3` prints unparenthesized and reparses as
+   * `(x = 1 OR x = 2) AND y = 3`, NOT the standard-SQL `x = 1 OR (x = 2 AND y = 3)` a real database
+   * would apply to that same text). Without forcing this flag on an OR-rooted `existing` WHERE
+   * before AND-ing the tenant predicate onto it, the emitted SQL would round-trip correctly through
+   * THIS library but be misread by the actual database the query runs against — defeating the
+   * constraint for exactly the OR-shaped queries this rewriter exists to constrain.
+   */
+  parentheses?: boolean;
 }
 
 interface ColumnRef {
@@ -108,8 +120,11 @@ export class TenantScopeRewriter {
     );
     if (scopedFrom.length === 0) return sql;
 
-    const existing = this.collectTenantPredicates(ast.where);
-    for (const predicate of existing) {
+    // Mismatch rejection looks at every tenant literal anywhere in the tree — including under an
+    // OR or NOT — because a query that so much as *names* a foreign tenant is suspicious and must
+    // throw, not silently be AND-ed down to zero rows.
+    const allPredicates = this.collectAllTenantPredicates(ast.where);
+    for (const predicate of allPredicates) {
       if (predicate.value !== tenantRef) {
         throw new Error(
           'tenant scope: tenant mismatch — query targets a tenant other than the current session',
@@ -117,7 +132,12 @@ export class TenantScopeRewriter {
       }
     }
 
-    const coveredAliases = new Set(existing.map((predicate) => predicate.tableAlias));
+    // Coverage is a different question: a predicate only actually constrains every row the query
+    // can return when it is on the top-level AND spine. A predicate under an OR (or NOT, or any
+    // other non-conjunctive operator) does not guarantee the constraint holds, so it must NOT
+    // suppress the AND-ed constraint below — see `collectConjunctiveTenantPredicates`.
+    const conjunctive = this.collectConjunctiveTenantPredicates(ast.where);
+    const coveredAliases = new Set(conjunctive.map((predicate) => predicate.tableAlias));
     for (const entry of scopedFrom) {
       const alias = entry.as ?? entry.table;
       const isAmbiguous = scopedFrom.length > 1;
@@ -132,14 +152,41 @@ export class TenantScopeRewriter {
     return this.parser.sqlify(ast as unknown as AST, { database: 'MySQL' });
   }
 
-  private collectTenantPredicates(where: unknown): ExtractedPredicate[] {
+  /**
+   * Every tenant-column `=` predicate anywhere in the tree (recurses into both `AND` and `OR`).
+   * Used ONLY for the mismatch check: a query naming a foreign tenant anywhere must be rejected,
+   * even where that predicate cannot be relied on to actually constrain the result set.
+   */
+  private collectAllTenantPredicates(where: unknown): ExtractedPredicate[] {
     if (!isBinaryExpr(where)) return [];
     if (where.operator === 'AND' || where.operator === 'OR') {
       return [
-        ...this.collectTenantPredicates(where.left),
-        ...this.collectTenantPredicates(where.right),
+        ...this.collectAllTenantPredicates(where.left),
+        ...this.collectAllTenantPredicates(where.right),
       ];
     }
+    return this.extractTenantPredicate(where);
+  }
+
+  /**
+   * Tenant-column `=` predicates on the top-level `AND` spine only. Descent stops at `OR` (and at
+   * any operator other than `AND`/`=`, e.g. `NOT`, which the parser represents as a `unary_expr`
+   * and so is never a `binary_expr` here) because only a conjunctively-combined predicate is
+   * guaranteed to hold for every row the query can return. Used for coverage: a table alias is
+   * "already scoped" only when one of these covers it.
+   */
+  private collectConjunctiveTenantPredicates(where: unknown): ExtractedPredicate[] {
+    if (!isBinaryExpr(where)) return [];
+    if (where.operator === 'AND') {
+      return [
+        ...this.collectConjunctiveTenantPredicates(where.left),
+        ...this.collectConjunctiveTenantPredicates(where.right),
+      ];
+    }
+    return this.extractTenantPredicate(where);
+  }
+
+  private extractTenantPredicate(where: BinaryExpr): ExtractedPredicate[] {
     if (where.operator !== '=') return [];
     const lhs = where.left;
     const rhs = where.right;
@@ -162,9 +209,18 @@ export class TenantScopeRewriter {
     return {
       type: 'binary_expr',
       operator: 'AND',
-      left: existing,
+      // Force `parentheses: true` regardless of whether the original SQL already had explicit
+      // parens here — see the doc comment on `BinaryExpr.parentheses`. Without it, an OR-rooted
+      // `existing` prints without the grouping parens a real database needs to apply the AND-ed
+      // tenant predicate to the WHOLE existing expression rather than just its last disjunct.
+      left: this.forceParens(existing),
       right: added,
     };
+  }
+
+  private forceParens(node: unknown): unknown {
+    if (typeof node !== 'object' || node === null) return node;
+    return { ...node, parentheses: true };
   }
 }
 
