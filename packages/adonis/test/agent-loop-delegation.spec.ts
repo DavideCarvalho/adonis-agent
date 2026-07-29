@@ -175,7 +175,35 @@ describe('runAgentLoop — delegation (agent-kind tool call) authorization', () 
     expect(rows[0]?.status).toBe('failed');
   });
 
-  it('fails closed when the model names an agent-kind tool with no registered spec', async () => {
+  it('does NOT call runAgent when the delegate input does not match the spec input schema', async () => {
+    const runAgent = vi.fn(async () => ({ text: 'should never happen' }));
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? {
+            text: 'delegating',
+            // Permitted actor, allow-listed delegate — but the input is malformed. Without the
+            // input gate the loop coerces it to a JSON blob and delegates it anyway.
+            toolCall: { name: 'ask_billing', input: { task: { nested: 1 } } },
+          }
+        : { text: 'done' };
+
+    const { result, store } = await run(script, runAgent, {
+      actorRoles: ['ADMIN'],
+      toolAllowList: ['ask_billing'],
+    });
+
+    expect(runAgent).not.toHaveBeenCalled();
+    expect(result.text).toBe('done');
+    const rows = store.toolCallRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).not.toBe('auto_executed');
+    expect(rows[0]?.status).toBe('failed');
+  });
+
+  // The `spec === undefined` guard inside the delegation branch is unreachable defensive code:
+  // `toolType = spec?.kind ?? 'read'` means an unresolved name never enters that branch at all.
+  // What this case actually covers is the `read` path rejecting it via `ToolNotFoundError`.
+  it('an unregistered tool name never reaches the delegation branch (it resolves as read and invoke throws)', async () => {
     const runAgent = vi.fn(async () => ({ text: 'should never happen' }));
     const script: FakeScript = (_args, turnIndex) =>
       turnIndex === 0
