@@ -5,6 +5,7 @@ import type { ApplicationService } from '@adonisjs/core/types';
 import {
   type AgentDashboardAuthorize,
   type AgentDashboardConfig,
+  decideDashboardMount,
   resolveDashboardConfig,
 } from '../src/server/define_config.js';
 import { evaluateDashboardGate } from '../src/server/gate.js';
@@ -30,6 +31,10 @@ import {
  * - `GET <mount>/`     → the SPA shell (`index.html`, with the resolved API base injected)
  * - `GET <mount>/*`    → a built asset, or the SPA shell as a fallback (client-rendered console)
  *
+ * Nothing mounts unless the agent config carries a `governanceAuthorize` gate: without it the
+ * `/agent/governance/*` routes the console reads do not exist, so the console would load and fail on
+ * every panel but Quota. The provider declines and logs why (see `decideDashboardMount`).
+ *
  * Enable/disable and override the mount via the optional `config('agent').dashboard` block.
  */
 export default class AgentDashboardProvider {
@@ -43,7 +48,15 @@ export default class AgentDashboardProvider {
     const dashboardConfig = resolveDashboardConfig(
       this.app.config.get<AgentDashboardConfig>('agent.dashboard', {}),
     );
-    if (!dashboardConfig.enabled) return;
+
+    // Mount only when the console can actually work: every panel but Quota reads the agent's
+    // cross-actor `/agent/governance/*` routes, and those do not exist without a `governanceAuthorize`
+    // gate. Refusing here — loudly — beats serving a shell that 404s its own data with no explanation.
+    const decision = decideDashboardMount(dashboardConfig.enabled, agentConfig.governanceAuthorize);
+    if (!decision.mount) {
+      if (decision.reason === 'no-governance-gate') console.warn(decision.warning);
+      return;
+    }
 
     // Resolve the router from the container, NOT from `@adonisjs/core/services/router`: that service's
     // default export is assigned inside an `app.booted()` hook, which runs AFTER every provider's

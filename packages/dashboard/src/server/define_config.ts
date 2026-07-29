@@ -1,4 +1,4 @@
-import type { Actor } from '@adonis-agora/agent';
+import type { Actor, AgentGovernanceAuthorize } from '@adonis-agora/agent';
 import type { HttpContext } from '@adonisjs/core/http';
 
 /**
@@ -18,13 +18,19 @@ export type AgentDashboardAuthorize = (
  * toggles it on/off, optionally overrides the mount path, and optionally adds an `authorize` gate.
  */
 export interface AgentDashboardConfig {
-  /** Mount the SPA. Default `true` — set `false` to keep the routes off entirely. */
+  /**
+   * Mount the SPA. Default `true` — set `false` to keep the routes off entirely. Note `true` is
+   * necessary but not sufficient: the console also needs the agent's `governanceAuthorize` gate, see
+   * {@link decideDashboardMount}.
+   */
   enabled?: boolean;
   /** Override the mount path. Default `<agentPath>/dashboard`. */
   path?: string;
   /**
    * Extra authorization run after the actor resolves. Return `false` to deny (`403`). Omit to allow
-   * any resolved actor (the default), matching the `/agent/governance/*` routes' gating.
+   * any resolved actor (the default) — note this is only an EXTRA gate on the SPA shell; whether the
+   * console mounts at all, and whether its data is readable, is decided by the agent config's
+   * `governanceAuthorize`.
    */
   authorize?: AgentDashboardAuthorize;
 }
@@ -43,4 +49,43 @@ export function resolveDashboardConfig(
   if (config?.path !== undefined) resolved.path = config.path;
   if (config?.authorize !== undefined) resolved.authorize = config.authorize;
   return resolved;
+}
+
+/** Whether the provider registers the console's routes, and (when it refuses) what to say about it. */
+export type DashboardMountDecision =
+  | { mount: true }
+  | { mount: false; reason: 'disabled' }
+  | { mount: false; reason: 'no-governance-gate'; warning: string };
+
+/**
+ * The exact wording the provider logs when it declines to mount. Mirrors the agent provider's own
+ * governance boot warning — same three facts, same vocabulary — so a reader who sees one recognises
+ * the other.
+ */
+const NO_GOVERNANCE_GATE_WARNING =
+  '[@adonis-agora/agent-dashboard] the governance console was NOT mounted: every panel but Quota reads the cross-actor `/agent/governance/*` routes, and those are themselves not mounted because no `governanceAuthorize` gate is configured — so the console would load and then fail on every panel. Set `governanceAuthorize` in config/agent.ts (e.g. an ADMIN check) to mount the routes and this console gated, or `governanceAuthorize: () => true` to deliberately restore the old behaviour of letting ANY authenticated actor read them. `GET /agent/approvals/mine` is unaffected — it stays mounted and scoped to the calling actor. To keep the console off on purpose and silence this, set `dashboard: { enabled: false }`.';
+
+/**
+ * Decide whether to register the console's routes at all — the router-free core of the provider's
+ * mount check, extracted so it can be unit tested without booting an app.
+ *
+ * The console is a pure consumer of the agent's cross-actor `/agent/governance/*` read routes, and
+ * those routes are not mounted unless the agent config carries a `governanceAuthorize` gate. Serving
+ * a shell that can only 404 its own data is worse than not serving it: the failure shows up as seven
+ * dead panels at click time with nothing anywhere explaining why. So the console follows the same
+ * fail-closed-by-omission rule one layer down — no gate, no routes — and says so at boot.
+ *
+ * This costs nothing that still works: every app affected is an app whose console is ALREADY dead in
+ * every view but Quota. `dashboard.authorize` is deliberately NOT the trigger; it gates the shell,
+ * not the data, and an app can set it and still have a console with nothing to render.
+ */
+export function decideDashboardMount(
+  enabled: boolean,
+  governanceAuthorize: AgentGovernanceAuthorize | undefined,
+): DashboardMountDecision {
+  if (!enabled) return { mount: false, reason: 'disabled' };
+  if (governanceAuthorize === undefined) {
+    return { mount: false, reason: 'no-governance-gate', warning: NO_GOVERNANCE_GATE_WARNING };
+  }
+  return { mount: true };
 }

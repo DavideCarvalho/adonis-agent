@@ -57,7 +57,9 @@ async function bootApp(options: {
             ? { governanceAuthorize: options.governanceAuthorize }
             : {}),
           dashboard: {
-            ...(options.dashboardEnabled !== undefined ? { enabled: options.dashboardEnabled } : {}),
+            ...(options.dashboardEnabled !== undefined
+              ? { enabled: options.dashboardEnabled }
+              : {}),
             ...(options.dashboardAuthorize !== undefined
               ? { authorize: options.dashboardAuthorize }
               : {}),
