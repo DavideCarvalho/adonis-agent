@@ -123,15 +123,23 @@ export interface AgentConfig {
    * Authorization gate for the cross-actor `/agent/governance/*` read routes. It runs after the actor
    * is resolved (the caller is authenticated) and decides whether THIS actor may read the platform-wide
    * governance read-model — every actor's spend, usage, threads, and pending HITL approvals. Return
-   * `false` to deny (the route replies `403`). Omit it and any resolved actor may read governance (the
-   * historical behavior, correct only when every authenticated caller is trusted staff); typically set
-   * it to an ADMIN check.
+   * `false` to deny (the route replies `403`).
    *
-   * This does NOT gate the per-actor `GET /agent/approvals/mine` route, which is always scoped to the
-   * calling actor's OWN pending approvals — so a non-admin surface (e.g. a coordinator's chat) can poll
-   * its own approvals even while the cross-actor governance read-model is ADMIN-only. Mirrors
-   * `@adonis-agora/agent-dashboard`'s `authorize` hook so the JSON routes and the console SPA can be
-   * gated with the same predicate.
+   * **The routes mount only when this gate exists.** Omit it and `/agent/governance/*` is NOT mounted
+   * at all (every route answers `404`), because an ungated cross-actor read-model exposes every
+   * actor's spend/usage/threads/approvals to any authenticated caller. Set it — typically an ADMIN
+   * check — to mount the routes gated, or set `governanceAuthorize: () => true` to deliberately
+   * restore the old behaviour of letting ANY authenticated actor read them. The provider logs a boot
+   * warning naming both paths when the read-model resolved but no gate is configured.
+   *
+   * This does NOT gate the per-actor `GET /agent/approvals/mine` route, which is unaffected: it stays
+   * mounted whenever the governance read-model resolves, and is always scoped to the calling actor's
+   * OWN pending approvals — so a non-admin surface (e.g. a coordinator's chat) can poll its own
+   * approvals even while the cross-actor governance read-model is ADMIN-only.
+   *
+   * `@adonis-agora/agent-dashboard`'s console reads these routes from the browser, so it mounts only
+   * when this gate exists too; its `dashboard.authorize` hook takes the same shape, so the JSON routes
+   * and the console SPA can be gated with the same predicate.
    */
   governanceAuthorize?: AgentGovernanceAuthorize;
   /**

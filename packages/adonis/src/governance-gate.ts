@@ -2,11 +2,16 @@ import type { HttpContext } from '@adonisjs/core/http';
 import type { Actor } from './types.js';
 
 /**
- * Optional authorization gate for the cross-actor `/agent/governance/*` read routes. It runs AFTER
- * the actor is resolved (so the caller is already authenticated), and decides whether THIS actor may
- * read the platform-wide governance read-model (every actor's spend/usage/threads/approvals). Return
- * `false` to deny (the route replies `403`). Omit the gate entirely and any resolved actor may read
- * governance — the historical behavior, correct only when every authenticated caller is trusted staff.
+ * Authorization gate for the cross-actor `/agent/governance/*` read routes. It runs AFTER the actor
+ * is resolved (so the caller is already authenticated), and decides whether THIS actor may read the
+ * platform-wide governance read-model (every actor's spend/usage/threads/approvals). Return `false`
+ * to deny (the route replies `403`).
+ *
+ * The gate is what makes those routes exist: omit it and the provider does NOT mount
+ * `/agent/governance/*` at all (every route answers `404`). Set it to mount them gated, or set
+ * `governanceAuthorize: () => true` to deliberately restore the old behaviour of letting ANY
+ * authenticated actor read them. `GET /agent/approvals/mine` is unaffected — it stays mounted and
+ * scoped to the calling actor's own pending approvals.
  *
  * Mirrors `@adonis-agora/agent-dashboard`'s `authorize` hook so the JSON routes and the console SPA
  * that reads them can be gated with the SAME predicate (typically "actor is ADMIN").
@@ -25,13 +30,24 @@ export interface GovernanceGateVerdict {
 }
 
 /**
- * Decide whether an already-resolved actor may read the governance routes — the router-free core of
- * the provider's governance gate, extracted so it can be unit tested without booting an app.
+ * Decide whether an already-resolved actor holds cross-actor governance privilege — the router-free
+ * core of the provider's governance gate, extracted so it can be unit tested without booting an app.
  *
- * - No `authorize` configured → `{ ok: true }` (governance open to any resolved actor).
+ * - No `authorize` configured → `{ ok: true }` (see the caveat below — the provider never gets here).
  * - `authorize` returns truthy → `{ ok: true }`.
  * - `authorize` returns falsy → `{ ok: false, status: 403 }`.
  * - `authorize` throws → `{ ok: false, status: 403 }` (fail-closed; the error message is surfaced).
+ *
+ * The `undefined` branch is a pure-function convenience, NOT a claim that governance is readable
+ * without a gate. Neither provider caller can reach it: `#resolveGovernanceActor` backs the
+ * `/agent/governance/*` routes, which are NOT mounted at all when no gate is configured (they answer
+ * `404`), so it always passes one; and `#assertOwner` — which reuses this predicate as the "may act
+ * across actors" seam for the per-actor run/thread routes — short-circuits to "not privileged" when
+ * no gate is configured, leaving ownership strict, rather than calling in. To mount the governance
+ * routes, set `governanceAuthorize` (typically an ADMIN check); to deliberately restore the old
+ * behaviour of letting ANY authenticated actor read them, set `governanceAuthorize: () => true`.
+ * Either way `GET /agent/approvals/mine` is unaffected — it stays mounted and scoped to the calling
+ * actor's own pending approvals.
  */
 export async function evaluateGovernanceGate(
   actor: Actor,
