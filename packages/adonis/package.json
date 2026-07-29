@@ -102,10 +102,10 @@
     "@standard-schema/spec": "^1.0.0"
   },
   "peerDependencies": {
-    "@adonis-agora/authz": "^0.4.0",
-    "@adonis-agora/diagnostics": "^0.1.0",
-    "@adonis-agora/durable": "^0.8.0",
-    "@adonis-agora/telescope": "^0.4.0",
+    "@adonis-agora/authz": ">=0.4.2 <1.0.0",
+    "@adonis-agora/diagnostics": ">=0.1.0 <1.0.0",
+    "@adonis-agora/durable": ">=0.8.0 <1.0.0",
+    "@adonis-agora/telescope": ">=0.4.0 <1.0.0",
     "@adonisjs/assembler": "^8.4.0",
     "@adonisjs/core": "^7.3.0",
     "@adonisjs/lucid": "^22.4.0",
@@ -158,7 +158,10 @@
     }
   },
   "devDependencies": {
-    "@adonis-agora/durable": "^0.8.0",
+    "@adonis-agora/authz": "^0.10.1",
+    "@adonis-agora/diagnostics": "^0.2.5",
+    "@adonis-agora/durable": "^0.20.0",
+    "@adonis-agora/telescope": "^0.6.0",
     "@adonisjs/assembler": "^8.4.0",
     "@adonisjs/core": "^7.3.0",
     "@adonisjs/lucid": "^22.4.0",
