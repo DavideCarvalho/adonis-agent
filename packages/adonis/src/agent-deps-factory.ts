@@ -20,7 +20,8 @@ export function delegateToolName(target: string): string {
 /**
  * The `{ task: string }` input a delegate (`agent`-kind) tool takes, as a zero-dependency Standard
  * Schema so synthesizing delegate tools never pulls in `zod` (an optional peer). The loop validates
- * against it before delegating.
+ * against it in the delegation branch of `agent-loop.ts` before delegating, mirroring
+ * `ToolRegistry.invoke`'s input gate for every other tool kind.
  */
 const delegateInputSchema: StandardSchemaV1<{ task: string }, { task: string }> = {
   '~standard': {

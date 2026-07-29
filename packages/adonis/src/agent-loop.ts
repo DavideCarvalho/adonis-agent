@@ -20,7 +20,7 @@ import type { Passage, RetrieveOptions, Retriever } from './spi/retriever.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { SinkWriter } from './spi/token-stream-sink.js';
 import type { AiToolCtx } from './spi/tool.js';
-import { ToolForbiddenError, type ToolRegistry } from './tool-registry.js';
+import { ToolForbiddenError, ToolInputInvalidError, type ToolRegistry } from './tool-registry.js';
 import { type ToolTransientRetrySetting, invokeWithTransientRetry } from './tool-retry.js';
 import type {
   Actor,
@@ -472,7 +472,7 @@ export async function runAgentLoop(
       // like `ToolRegistry.invoke` fails closed for every other tool kind.
       if (toolType === 'agent') {
         const targetAgent = spec?.targetAgent ?? call.name;
-        const task = extractTask(call.input);
+        let task: string;
 
         try {
           if (spec === undefined) {
@@ -490,6 +490,14 @@ export async function runAgentLoop(
           if (!(await deps.rolesPolicy.can(input.actor, spec))) {
             throw new ToolForbiddenError(call.name);
           }
+          // The third gate `ToolRegistry.invoke` applies, in the same order: authorization first,
+          // then shape. Delegation bypasses `invoke` (it is a ctx-level suspend point), so the gate
+          // has to be re-applied here or a malformed input is silently coerced instead of rejected.
+          const validation = await spec.inputSchema['~standard'].validate(call.input);
+          if (validation.issues !== undefined) {
+            throw new ToolInputInvalidError(call.name, validation.issues);
+          }
+          task = extractTask(validation.value);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           // A denied delegation is recorded `failed` directly — never `auto_executed` even
