@@ -20,7 +20,7 @@ import type { Passage, Retriever } from './spi/retriever.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { SinkWriter } from './spi/token-stream-sink.js';
 import type { AiToolCtx } from './spi/tool.js';
-import type { ToolRegistry } from './tool-registry.js';
+import { ToolForbiddenError, type ToolRegistry } from './tool-registry.js';
 import { type ToolTransientRetrySetting, invokeWithTransientRetry } from './tool-retry.js';
 import type {
   AgentRunInput,
@@ -437,9 +437,53 @@ export async function runAgentLoop(
 
       // Delegation: an `agent`-kind tool runs another agent. Handled at the LOOP level (not in a
       // step) because the durable runner maps it to `ctx.child`, a ctx-level suspend point.
+      //
+      // This bypasses `ToolRegistry.invoke`, so it must apply the same two gates `invoke` applies
+      // itself — the role/ability re-check AND the offered-tools (persona/agent allow-list) filter
+      // — BEFORE any persistence or event publication. Synthesized delegate specs
+      // (`registerDelegateTools` in agent-deps-factory.ts) carry no `roles`/`ability` on purpose —
+      // under `DefaultRolesPolicy` that is ADMIN-only, under an authz posture a tool with no
+      // `ability` is always denied — so an unauthorized delegate call must fail closed here exactly
+      // like `ToolRegistry.invoke` fails closed for every other tool kind.
       if (toolType === 'agent') {
         const targetAgent = spec?.targetAgent ?? call.name;
         const task = extractTask(call.input);
+
+        try {
+          if (spec === undefined) {
+            // Never actually reachable today (an unresolved name defaults `toolType` to 'read'
+            // above), but an `agent`-kind call with no resolvable spec must fail closed rather than
+            // fall through — and this narrows `spec` to `ToolSpec` for the `rolesPolicy.can` call
+            // below.
+            throw new ToolForbiddenError(call.name);
+          }
+          const offeredAllow = intersectAllow(persona?.allowedTools, deps.toolAllowList);
+          if (offeredAllow !== undefined && !offeredAllow.includes(call.name)) {
+            // A tool the model was not offered must not run, even if the model names it anyway.
+            throw new ToolForbiddenError(call.name);
+          }
+          if (!(await deps.rolesPolicy.can(input.actor, spec))) {
+            throw new ToolForbiddenError(call.name);
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          // A denied delegation is recorded `failed` directly — never `auto_executed` even
+          // transiently — and never emits `agent.delegated`.
+          await hooks.step(`persist:toolcall:${call.id}`, () =>
+            deps.store.recordToolCall({
+              toolCallId: call.id,
+              messageId: assistant.id,
+              toolName: call.name,
+              toolType: 'read',
+              input: call.input,
+              status: 'failed',
+              runId: hooks.runId,
+            }),
+          );
+          results.push({ id: call.id, name: call.name, output: null, error: message });
+          continue;
+        }
+
         await hooks.step(`persist:toolcall:${call.id}`, () =>
           deps.store.recordToolCall({
             toolCallId: call.id,
