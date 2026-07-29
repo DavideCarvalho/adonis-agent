@@ -55,7 +55,8 @@ export function resolveDashboardConfig(
 export type DashboardMountDecision =
   | { mount: true }
   | { mount: false; reason: 'disabled' }
-  | { mount: false; reason: 'no-governance-gate'; warning: string };
+  | { mount: false; reason: 'no-governance-gate'; warning: string }
+  | { mount: false; reason: 'no-governance-queries'; warning: string };
 
 /**
  * The exact wording the provider logs when it declines to mount. Mirrors the agent provider's own
@@ -64,6 +65,16 @@ export type DashboardMountDecision =
  */
 const NO_GOVERNANCE_GATE_WARNING =
   '[@adonis-agora/agent-dashboard] the governance console was NOT mounted: every panel but Quota reads the cross-actor `/agent/governance/*` routes, and those are themselves not mounted because no `governanceAuthorize` gate is configured — so the console would load and then fail on every panel. Set `governanceAuthorize` in config/agent.ts (e.g. an ADMIN check) to mount the routes and this console gated, or `governanceAuthorize: () => true` to deliberately restore the old behaviour of letting ANY authenticated actor read them. `GET /agent/approvals/mine` is unaffected — it stays mounted and scoped to the calling actor. To keep the console off on purpose and silence this, set `dashboard: { enabled: false }`.';
+
+/**
+ * The wording logged when the read-model itself was turned off. Deliberately distinct from
+ * {@link NO_GOVERNANCE_GATE_WARNING}: both produce the same dead console, and an operator staring at
+ * a 404 must be able to tell from the log ALONE which of the two knobs is responsible. A shared
+ * "governance is not configured" message would recreate exactly the diagnosability problem this
+ * check exists to remove.
+ */
+const NO_GOVERNANCE_QUERIES_WARNING =
+  '[@adonis-agora/agent-dashboard] the governance console was NOT mounted: `governanceQueries` is set to `false` in config/agent.ts, so the cross-actor read-model was never built and the `/agent/governance/*` routes it serves do not exist — the console would load and then fail on every panel but Quota. A `governanceAuthorize` gate is NOT the missing piece here; it is already configured. Remove `governanceQueries: false` (omit it to get the Lucid read-model when the main store is Lucid, or pass a store/factory explicitly) to mount the read-model and this console. To keep the console off on purpose and silence this, set `dashboard: { enabled: false }`.';
 
 /**
  * Decide whether to register the console's routes at all — the router-free core of the provider's
@@ -82,10 +93,21 @@ const NO_GOVERNANCE_GATE_WARNING =
 export function decideDashboardMount(
   enabled: boolean,
   governanceAuthorize: AgentGovernanceAuthorize | undefined,
+  governanceQueries?: unknown,
 ): DashboardMountDecision {
   if (!enabled) return { mount: false, reason: 'disabled' };
   if (governanceAuthorize === undefined) {
     return { mount: false, reason: 'no-governance-gate', warning: NO_GOVERNANCE_GATE_WARNING };
+  }
+  // ONLY an explicit `false` is decidable here. `undefined` does NOT mean "no read-model": the agent
+  // provider's `#resolveGovernance` defaults it to the Lucid read-model whenever the main store is
+  // Lucid, and reproducing that resolution would duplicate provider logic in the dashboard.
+  if (governanceQueries === false) {
+    return {
+      mount: false,
+      reason: 'no-governance-queries',
+      warning: NO_GOVERNANCE_QUERIES_WARNING,
+    };
   }
   return { mount: true };
 }

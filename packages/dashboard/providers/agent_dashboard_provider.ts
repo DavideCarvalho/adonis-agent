@@ -52,9 +52,13 @@ export default class AgentDashboardProvider {
     // Mount only when the console can actually work: every panel but Quota reads the agent's
     // cross-actor `/agent/governance/*` routes, and those do not exist without a `governanceAuthorize`
     // gate. Refusing here — loudly — beats serving a shell that 404s its own data with no explanation.
-    const decision = decideDashboardMount(dashboardConfig.enabled, agentConfig.governanceAuthorize);
+    const decision = decideDashboardMount(
+      dashboardConfig.enabled,
+      agentConfig.governanceAuthorize,
+      agentConfig.governanceQueries,
+    );
     if (!decision.mount) {
-      if (decision.reason === 'no-governance-gate') console.warn(decision.warning);
+      if (decision.reason !== 'disabled') console.warn(decision.warning);
       return;
     }
 

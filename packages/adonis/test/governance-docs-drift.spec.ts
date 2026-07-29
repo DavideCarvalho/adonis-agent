@@ -116,10 +116,7 @@ const sites: [name: string, text: string][] = [
   ['agent provider boot warning', governanceBootWarning()],
   // The published pages. These are the pages a reader lands on from search or from the config
   // reference's cross-link, so they carry the SAME four facts as the source above.
-  [
-    'docs/governance/read-model.mdx',
-    flattenMdx(read('docs', 'governance', 'read-model.mdx')),
-  ],
+  ['docs/governance/read-model.mdx', flattenMdx(read('docs', 'governance', 'read-model.mdx'))],
   [
     'docs/governance/authorization.mdx',
     flattenMdx(read('docs', 'governance', 'authorization.mdx')),
