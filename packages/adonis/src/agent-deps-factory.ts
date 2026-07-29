@@ -10,7 +10,7 @@ import type { RolesPolicy } from './spi/roles-policy.js';
 import type { TokenStreamSink } from './spi/token-stream-sink.js';
 import type { ToolRegistry } from './tool-registry.js';
 import type { ToolTransientRetrySetting } from './tool-retry.js';
-import type { AgentDefinition, Persona } from './types.js';
+import type { Actor, AgentDefinition, Persona } from './types.js';
 
 /** The synthesized `agent`-kind tool name an orchestrator uses to delegate to `target`. */
 export function delegateToolName(target: string): string {
@@ -93,6 +93,11 @@ export interface AgentDepsFactoryConfig {
   /** How many passages inject-mode retrieval requests. Undefined → 5. */
   retrievalTopK?: number;
   /**
+   * Shared hook deriving the inject-mode retrieval filter from the run's actor, applied for every
+   * agent. Without it, retrieval is UNSCOPED. See the doc comment on `AgentConfig.retrievalFilter`.
+   */
+  retrievalFilter?: (actor: Actor) => Record<string, unknown>;
+  /**
    * Shared in-place transient-retry policy applied to every agent's tool invocations (DB deadlock /
    * lock-wait timeout / serialization failure). Undefined → the loop default; `false` disables it.
    */
@@ -148,6 +153,9 @@ export class AgentDepsFactory {
       ...(this.config.retriever !== undefined ? { retriever: this.config.retriever } : {}),
       ...(this.config.retrievalTopK !== undefined
         ? { retrievalTopK: this.config.retrievalTopK }
+        : {}),
+      ...(this.config.retrievalFilter !== undefined
+        ? { retrievalFilter: this.config.retrievalFilter }
         : {}),
       ...(this.config.toolTransientRetry !== undefined
         ? { toolTransientRetry: this.config.toolTransientRetry }

@@ -7,7 +7,7 @@ import type { RolesPolicy } from './spi/roles-policy.js';
 import type { TokenStreamSink } from './spi/token-stream-sink.js';
 import type { ToolRegistry } from './tool-registry.js';
 import type { ToolTransientRetrySetting } from './tool-retry.js';
-import type { Persona, PromptBuilder } from './types.js';
+import type { Actor, Persona, PromptBuilder } from './types.js';
 
 /** Everything `runAgentLoop` needs, minus the per-run `day` the runner stamps. */
 export interface AgentDeps {
@@ -31,6 +31,11 @@ export interface AgentDeps {
   retriever?: Retriever;
   /** How many passages inject-mode retrieval requests. Undefined → 5. */
   retrievalTopK?: number;
+  /**
+   * Derives the metadata filter applied to inject-mode RAG retrieval, from the run's actor.
+   * Without it, retrieval is UNSCOPED. See the doc comment on `AgentConfig.retrievalFilter`.
+   */
+  retrievalFilter?: (actor: Actor) => Record<string, unknown>;
   /**
    * In-place transient-retry policy for a tool's own invocation (DB deadlock / lock-wait timeout /
    * serialization failure). Undefined → the loop's default (`{ attempts: 2, backoffMs: 150 }`);

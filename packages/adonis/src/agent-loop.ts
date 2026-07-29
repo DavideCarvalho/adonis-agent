@@ -16,13 +16,14 @@ import {
   estimateCost,
 } from './spi/pricing-store.js';
 import type { QuotaStore } from './spi/quota-store.js';
-import type { Passage, Retriever } from './spi/retriever.js';
+import type { Passage, RetrieveOptions, Retriever } from './spi/retriever.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { SinkWriter } from './spi/token-stream-sink.js';
 import type { AiToolCtx } from './spi/tool.js';
 import { ToolForbiddenError, type ToolRegistry } from './tool-registry.js';
 import { type ToolTransientRetrySetting, invokeWithTransientRetry } from './tool-retry.js';
 import type {
+  Actor,
   AgentRunInput,
   Decision,
   MessageUsage,
@@ -69,6 +70,15 @@ export interface AgentLoopDeps {
   retriever?: Retriever;
   /** How many passages inject-mode retrieval requests. Undefined → 5. */
   retrievalTopK?: number;
+  /**
+   * Derives the metadata filter applied to inject-mode RAG retrieval, from the run's actor.
+   * Without it, retrieval is UNSCOPED: every passage in the corpus is eligible for every actor's
+   * system prompt. Any deployment sharing one corpus across tenants must set this. The returned
+   * object is passed verbatim as `RetrieveOptions.filter` and is interpreted by the store (see the
+   * `audience` ACL pattern in docs/retrieval/rag.mdx). A throwing hook fails the turn rather than
+   * falling back to unfiltered retrieval — a filter that fails open is worse than no filter.
+   */
+  retrievalFilter?: (actor: Actor) => Record<string, unknown>;
   /**
    * Retries a tool's own invocation, in place, when it throws a classified-transient error (a DB
    * deadlock, a lock-wait timeout, a serialization failure — see {@link isTransientToolError}) —
@@ -281,15 +291,30 @@ export async function runAgentLoop(
     const topK = deps.retrievalTopK ?? 5;
     // Span the retrieval INSIDE the step body so durable replay (which returns the cached passages)
     // never re-emits it. traceId = runId correlates it into the turn's waterfall.
-    const passages = await hooks.step('retrieve', () =>
-      spannedAgent(
+    //
+    // The filter is derived HERE, inside the step body, not before `hooks.step` is called: durable
+    // replay must reuse the cached passages rather than recomputing a filter that might have
+    // changed since. `retrievalFilter` is called synchronously — if it throws, that throw
+    // propagates out of the step (the `async` wrapper below turns a synchronous throw into a
+    // rejection) and fails the turn. It must NEVER be caught here and treated as "no filter": a
+    // filter that fails open is worse than no filter, because the operator believes it is on.
+    // With no hook configured, `filter` is omitted from `options` entirely (not set to
+    // `undefined`) so existing single-tenant deployments send byte-identical options.
+    const passages = await hooks.step('retrieve', async () => {
+      const options: RetrieveOptions = {
+        topK,
+        ...(deps.retrievalFilter !== undefined
+          ? { filter: deps.retrievalFilter(input.actor) }
+          : {}),
+      };
+      return spannedAgent(
         'retrieval',
         hooks.runId,
         { runId: hooks.runId, queryLength: input.userText.length, topK },
-        () => retriever.retrieve(input.userText, { topK }),
+        () => retriever.retrieve(input.userText, options),
         (retrieved) => ({ count: retrieved.length }),
-      ),
-    );
+      );
+    });
     if (passages.length > 0) {
       injectedPassages = passages;
       system = `${system}\n\n${buildContextBlock(passages)}`;

@@ -207,6 +207,31 @@ Use the retrieved context above to answer when relevant, and cite sources by the
 Inject mode retrieves *every* turn, up front. If you'd rather let the model **decide** when to search, don't set `retriever` — instead author a `read` [tool](/docs/agent/authoring/tools) that calls `retriever.retrieve(...)` itself. That's agentic retrieval; the loop sets nothing and the model calls the tool when it needs context. The two modes compose.
 </Callout>
 
+### Scoping inject mode with `retrievalFilter`
+
+<Callout type="warn" title="Inject mode is UNSCOPED by default">
+Setting `retriever` alone retrieves from the **whole corpus** for every actor. If your corpus mixes documents that shouldn't all be visible to every caller (multiple tenants, or documents with an `audience` ACL), an unset `retrievalFilter` means every actor's system prompt can be folded in with passages another tenant uploaded. Any app that shares one corpus across callers must set `retrievalFilter`.
+</Callout>
+
+`retrievalFilter` derives the same `RetrieveOptions.filter` used above for agentic/manual retrieval, but from the run's `actor`, applied automatically to every inject-mode retrieval:
+
+```ts title="config/agent.ts"
+import { defineConfig } from '@adonis-agora/agent'
+
+export default defineConfig({
+  model: () => aiSdkModel(openai('gpt-4o-mini')),
+  retriever: myRetriever,
+  // Mirrors the `audience` ACL pattern: pass only the tokens THIS actor holds.
+  retrievalFilter: (actor) => ({
+    audience: ['public', ...(actor.roles ?? []).map((r) => `role:${r}`), `base:${actor.tenantRef}`],
+  }),
+})
+```
+
+- The hook runs **inside** the same `hooks.step('retrieve', …)` as the retrieval call itself, so a durable replay never re-derives a filter that might have changed since — it reuses the checkpointed passages.
+- With no `retrievalFilter` configured, `filter` is omitted from the options passed to `retriever.retrieve(...)` entirely — not set to `undefined` — so existing single-tenant deployments are unaffected.
+- If the hook throws, the turn fails outright rather than falling back to unfiltered retrieval — a filter that silently fails open is worse than no filter, because the operator believes it is on.
+
 ## Ingestion helpers
 
 For runtime ingestion (outside the factory's boot-time `documents`), the RAG helpers are exported from the root:

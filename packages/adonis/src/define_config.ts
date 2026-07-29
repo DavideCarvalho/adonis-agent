@@ -48,7 +48,7 @@ import type {
   TokenSinkFactory,
 } from './stores/factory.js';
 import type { ToolTransientRetrySetting } from './tool-retry.js';
-import type { AgentDefinition } from './types.js';
+import type { Actor, AgentDefinition } from './types.js';
 
 /** A lazy factory thunk, so the peer (`ai`/a provider SDK) is imported only when the config loads. */
 export type ModelFactory = () => ModelProvider | Promise<ModelProvider>;
@@ -143,6 +143,14 @@ export interface AgentConfig {
   retriever?: Retriever | RetrieverFactory;
   /** How many passages inject-mode retrieval requests per run. Default 5. */
   retrievalTopK?: number;
+  /**
+   * Derives the metadata filter applied to inject-mode RAG retrieval, from the run's actor.
+   * Without it, retrieval is UNSCOPED: every passage in the corpus is eligible for every
+   * actor's system prompt. Any deployment sharing one corpus across tenants must set this.
+   * The returned object is passed verbatim as `RetrieveOptions.filter` and is interpreted by
+   * the store (see the `audience` ACL pattern in docs/retrieval/rag.mdx).
+   */
+  retrievalFilter?: (actor: Actor) => Record<string, unknown>;
   /**
    * Upload-side seam for message attachments (image/PDF). When set, the provider mounts the optional
    * `POST /agent/attachments` route, which stages an uploaded file through this store and returns a

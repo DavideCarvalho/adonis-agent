@@ -173,6 +173,7 @@ export default class AgentProvider {
       ...(pricingStore !== undefined ? { pricingStore } : {}),
       ...(retriever !== undefined ? { retriever } : {}),
       ...(config.retrievalTopK !== undefined ? { retrievalTopK: config.retrievalTopK } : {}),
+      ...(config.retrievalFilter !== undefined ? { retrievalFilter: config.retrievalFilter } : {}),
       ...(config.toolTransientRetry !== undefined
         ? { toolTransientRetry: config.toolTransientRetry }
         : {}),
