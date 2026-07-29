@@ -74,14 +74,16 @@ const DEFAULT_ALLOWED_ATTACHMENT_CONTENT_TYPES: readonly string[] = [
  *   tools for `delegatesTo` edges, builds the runtime graph (store/sink/quota/authorizer/actor-resolver
  *   → deps factory → the inline runner → the `AgentService` facade), and mounts the `/agent` routes
  *   under `config.path` — plus optional routes (`POST /agent/attachments` when `attachmentStaging` is
- *   configured; the `/agent/governance/*` read-model and `/agent/approvals/mine` when `governanceQueries`
- *   is configured).
+ *   configured; `/agent/approvals/mine` when `governanceQueries` is configured; the cross-actor
+ *   `/agent/governance/*` read-model when `governanceQueries` is configured AND a `governanceAuthorize`
+ *   gate exists).
  *
  * Every route resolves the acting actor (401 if it can't). Run/thread routes (stream re-attach,
  * cancel, tool-call approve/reject, `threads/:id` read/delete/fork) are additionally owner-scoped:
  * a caller may act only on runs/threads it owns, unless it is governance-privileged (`governanceAuthorize`).
- * The cross-actor `/agent/governance/*` read-model is gated by `governanceAuthorize`; `approvals/mine`
- * is always scoped to the caller's own pending approvals.
+ * The cross-actor `/agent/governance/*` read-model fails closed by omission: without a
+ * `governanceAuthorize` gate it is not mounted at all (404). `approvals/mine` is always scoped to the
+ * caller's own pending approvals and mounts regardless of the gate.
  *
  * The selected store (`lucid`/`memory`) is built lazily from the config so its peer (`@adonisjs/lucid`)
  * loads only when chosen. Agent lifecycle events are emitted structurally by core onto the
@@ -555,12 +557,14 @@ export default class AgentProvider {
       });
     }
 
-    // The cross-actor governance read-model is mounted (often by default, when the main store is
-    // Lucid) but no authorization gate was configured — so every authenticated actor can read the
-    // platform-wide spend/usage/threads/approvals. Nudge the app to gate it (typically ADMIN-only).
+    // The governance read-model resolved (often by default, when the main store is Lucid) but no
+    // authorization gate was configured. The cross-actor `/agent/governance/*` routes are therefore
+    // NOT mounted at all (they 404) — fail closed by omission, because an ungated cross-actor
+    // read-model exposes every actor's spend/usage/threads/approvals to any authenticated caller,
+    // and a boot warning is not a control. `/agent/approvals/mine` is unaffected (see below).
     if (governance !== undefined && governanceAuthorize === undefined) {
       console.warn(
-        '[@adonis-agora/agent] `/agent/governance/*` is mounted without a `governanceAuthorize` gate — the cross-actor spend/usage/approvals read-model is readable by ANY authenticated actor. Set `governanceAuthorize` in config/agent.ts (e.g. an ADMIN check) to restrict it.',
+        '[@adonis-agora/agent] `/agent/governance/*` was NOT mounted: the cross-actor spend/usage/threads/approvals read-model requires a `governanceAuthorize` gate, and none is configured. Set `governanceAuthorize` in config/agent.ts (e.g. an ADMIN check) to mount the routes gated, or `governanceAuthorize: () => true` to deliberately restore the old behaviour of letting ANY authenticated actor read them. `GET /agent/approvals/mine` is unaffected — it stays mounted and scoped to the calling actor.',
       );
     }
 
@@ -586,14 +590,16 @@ export default class AgentProvider {
       });
     }
 
-    // ── OPTIONAL governance read routes. Mounted only when `governanceQueries` is configured, so an
-    // app without it never exposes the cost/usage read-model. All read-only (GET). Each route resolves
-    // the actor (401 on failure) and then runs the optional `governanceAuthorize` gate (403 on deny)
-    // via `#resolveGovernanceActor` — governance is cross-actor data, so an app can restrict it (e.g.
-    // ADMIN-only) without also locking the per-actor `approvals/mine` route above. `from`/`to` are
-    // inclusive UTC days (`YYYY-MM-DD`), defaulting to today; `limit` defaults to 50, clamped to 200
-    // (mirroring the dashboard's own clamp).
-    if (governance !== undefined) {
+    // ── OPTIONAL cross-actor governance read routes. Mounted only when `governanceQueries` is
+    // configured AND a `governanceAuthorize` gate exists — no gate means the routes do not exist at
+    // all (404), because every one of them reads PLATFORM-WIDE data (no route below is scoped to the
+    // caller). Fail closed by omission: an app that wants the historical open behaviour asks for it
+    // explicitly with `governanceAuthorize: () => true`. All read-only (GET). Each route resolves the
+    // actor (401 on failure) and then runs the gate (403 on deny) via `#resolveGovernanceActor` —
+    // restricting this read-model (e.g. ADMIN-only) never locks the per-actor `approvals/mine` route
+    // above. `from`/`to` are inclusive UTC days (`YYYY-MM-DD`), defaulting to today; `limit` defaults
+    // to 50, clamped to 200 (mirroring the dashboard's own clamp).
+    if (governance !== undefined && governanceAuthorize !== undefined) {
       const gov = governance;
       const g = (suffix: string) => p(`governance/${suffix}`);
       const range = (ctx: HttpContext) => {
