@@ -14,8 +14,8 @@ import {
   ToolRegistry,
   UnconfiguredActorResolver,
 } from '../src/index.js';
-import type { Actor, FakeScript, QuotaStore } from '../src/index.js';
-import { FakeModelProvider, InMemoryQuotaStore } from '../src/testing/index.js';
+import type { Actor, QuotaStore } from '../src/index.js';
+import { FakeModelProvider, type FakeScript, InMemoryQuotaStore } from '../src/testing/index.js';
 import { asStoreDb, makeStoreDb } from './helpers/make-db.js';
 
 const actor: Actor = { id: 'u1', roles: ['ADMIN'] };

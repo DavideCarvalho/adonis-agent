@@ -17,7 +17,7 @@ afterEach(() => {
 
 /** Records the args it was called with; returns a fixed role set. */
 class FakeAuthz implements AuthzRolesSourceLike {
-  readonly calls: Array<{ user: unknown; scope?: AuthzTenantScope }> = [];
+  readonly calls: Array<{ user: unknown; scope: AuthzTenantScope | undefined }> = [];
   constructor(private readonly roles: string[]) {}
   async effectiveRoles(user: unknown, scope?: AuthzTenantScope): Promise<string[]> {
     this.calls.push({ user, scope });

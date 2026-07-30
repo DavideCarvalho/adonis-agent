@@ -17,7 +17,11 @@ import type { Actor, ToolSpec } from '../src/types.js';
  * test can assert the scope that was forwarded.
  */
 class FakeAuthz implements AuthzServiceLike {
-  readonly calls: Array<{ user: unknown; permission: string; scope?: AuthzTenantScope }> = [];
+  readonly calls: Array<{
+    user: unknown;
+    permission: string;
+    scope: AuthzTenantScope | undefined;
+  }> = [];
 
   constructor(
     private readonly grants: Array<{ id: string; permission: string; tenantId?: string }>,

@@ -14,9 +14,10 @@ import {
   InlineAgentRunner,
   ToolRegistry,
 } from '../src/index.js';
-import type { Actor, FakeScript, MessageAttachment, ModelMessage } from '../src/index.js';
+import type { Actor, MessageAttachment, ModelMessage } from '../src/index.js';
 import {
   FakeModelProvider,
+  type FakeScript,
   InMemoryAgentStore,
   InMemoryAttachmentStagingStore,
   InMemoryTokenStreamSink,

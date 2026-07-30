@@ -14,8 +14,8 @@ import {
   type Retriever,
   ToolRegistry,
 } from '../src/index.js';
-import type { Actor, FakeScript } from '../src/index.js';
-import { FakeModelProvider } from '../src/testing/index.js';
+import type { Actor } from '../src/index.js';
+import { FakeModelProvider, type FakeScript } from '../src/testing/index.js';
 import { asStoreDb, makeStoreDb } from './helpers/make-db.js';
 
 const actor: Actor = { id: 'u1', roles: ['ADMIN'] };

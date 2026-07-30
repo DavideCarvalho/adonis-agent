@@ -8,18 +8,21 @@ import {
 import type { QdrantClientLike } from '../src/rag/qdrant-store.js';
 import { FakeEmbeddingProvider } from '../src/testing/index.js';
 
+/** Shapes das respostas canned derivadas do próprio {@link QdrantClientLike} — assim o fake não
+ *  pode divergir do contrato que ele implementa quando a interface mudar. */
+type QdrantQueryResult = Awaited<ReturnType<QdrantClientLike['query']>>;
+type QdrantScrollResult = Awaited<ReturnType<QdrantClientLike['scroll']>>;
+
 /** Recording fake — captura toda chamada e devolve respostas canned. Prova que a
  *  store fala com o Qdrant do jeito certo SEM um Qdrant vivo (espelha RecordingDb). */
 class RecordingQdrantClient implements QdrantClientLike {
   calls: { method: string; args: unknown[] }[] = [];
   collections: string[] = [];
-  queryResult: { points: unknown[] } = { points: [] };
-  scrollResult: { points: unknown[]; next_page_offset?: unknown } = { points: [] };
+  queryResult: QdrantQueryResult = { points: [] };
+  scrollResult: QdrantScrollResult = { points: [] };
   /** Quando setado, sobrepõe `scrollResult` e decide a página a partir de `args.offset`
    *  — permite testar paginação multi-página (offset ausente → página 1, presente → página 2+). */
-  scrollByOffset?: (args: {
-    offset?: unknown;
-  }) => { points: unknown[]; next_page_offset?: unknown };
+  scrollByOffset?: (args: { offset?: unknown }) => QdrantScrollResult;
 
   async getCollections() {
     this.calls.push({ method: 'getCollections', args: [] });

@@ -15,23 +15,39 @@ function createSink(): SinkWriter {
   return { write() {}, end() {} };
 }
 
+/**
+ * The stream-part type the mock model must emit, derived from the SDK's own `doStream` contract so it
+ * cannot drift — and without importing `@ai-sdk/provider` (not a dependency of this package). Without
+ * the annotation the chunk array widens to a union of literal shapes padded with `?: never` members,
+ * which is not assignable to the SDK's stream-part union.
+ */
+type StreamChunk = Awaited<ReturnType<MockLanguageModelV3['doStream']>> extends {
+  stream: ReadableStream<infer C>;
+}
+  ? C
+  : never;
+
 function recordingModel(): MockLanguageModelV3 {
+  const chunks: StreamChunk[] = [
+    { type: 'stream-start', warnings: [] },
+    { type: 'text-start', id: '1' },
+    { type: 'text-delta', id: '1', delta: 'ok' },
+    { type: 'text-end', id: '1' },
+    {
+      type: 'finish',
+      // `LanguageModelV3FinishReason` is an object (`{ unified, raw }`) and `LanguageModelV3Usage`
+      // nests the token counts — the bare `'stop'` string and the flat `{ inputTokens, outputTokens,
+      // totalTokens }` form both predate the v3 provider spec. Values are incidental scaffolding:
+      // this spec asserts only the tool JSON schemas the SDK hands the model.
+      finishReason: { unified: 'stop', raw: 'stop' },
+      usage: {
+        inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 1, text: 1, reasoning: 0 },
+      },
+    },
+  ];
   return new MockLanguageModelV3({
-    doStream: async () => ({
-      stream: simulateReadableStream({
-        chunks: [
-          { type: 'stream-start', warnings: [] },
-          { type: 'text-start', id: '1' },
-          { type: 'text-delta', id: '1', delta: 'ok' },
-          { type: 'text-end', id: '1' },
-          {
-            type: 'finish',
-            finishReason: 'stop',
-            usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-          },
-        ],
-      }),
-    }),
+    doStream: async () => ({ stream: simulateReadableStream({ chunks }) }),
   });
 }
 

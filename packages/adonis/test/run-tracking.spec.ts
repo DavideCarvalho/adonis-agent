@@ -18,9 +18,10 @@ import {
   LucidGovernanceQueries,
   ToolRegistry,
 } from '../src/index.js';
-import type { Actor, FakeScript } from '../src/index.js';
+import type { Actor } from '../src/index.js';
 import {
   FakeModelProvider,
+  type FakeScript,
   InMemoryAgentStore,
   InMemoryTokenStreamSink,
 } from '../src/testing/index.js';

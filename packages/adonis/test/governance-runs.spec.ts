@@ -177,7 +177,8 @@ function runContract(name: string, make: () => Promise<AgentGovernanceQueries>):
       expect(first.runs.map((r) => r.runId)).toEqual(['run-4', 'run-3']);
       expect(first.nextCursor).not.toBeNull();
 
-      const second = await gov.listRuns({ limit: 2, cursor: first.nextCursor ?? undefined });
+      // Non-null asserted: the line above already asserts `first.nextCursor` is not null.
+      const second = await gov.listRuns({ limit: 2, cursor: first.nextCursor! });
       expect(second.runs.map((r) => r.runId)).toEqual(['run-2', 'run-1']);
       expect(second.nextCursor).toBeNull();
     });

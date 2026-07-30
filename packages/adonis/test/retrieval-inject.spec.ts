@@ -14,9 +14,10 @@ import {
   InlineAgentRunner,
   ToolRegistry,
 } from '../src/index.js';
-import type { Actor, FakeScript, Passage, RetrieveOptions, Retriever } from '../src/index.js';
+import type { Actor, Passage, RetrieveOptions, Retriever } from '../src/index.js';
 import {
   FakeModelProvider,
+  type FakeScript,
   InMemoryAgentStore,
   InMemoryTokenStreamSink,
   inMemoryRetriever,
@@ -189,7 +190,7 @@ describe('inject-mode retrieval filter (retrievalFilter)', () => {
     await collectStream(g.service, runId);
 
     expect(seenOptions).toHaveLength(1);
-    expect(seenOptions[0].filter).toEqual({ tenantRef: 'tenant-abc' });
+    expect(seenOptions[0]!.filter).toEqual({ tenantRef: 'tenant-abc' });
   });
 
   it('2. with no hook configured, the retriever receives options with NO `filter` key at all', async () => {

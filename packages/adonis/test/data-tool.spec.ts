@@ -19,7 +19,9 @@ class FakeRunner implements QueryRunner {
 }
 
 /** Build an AiToolCtx. `tenantRef` is deliberately typed loosely so we can pass `null` to prove it is NOT privileged. */
-function ctx(overrides: { roles?: string[]; tenantRef?: string | null } = {}): AiToolCtx {
+function ctx(
+  overrides: { roles?: string[]; tenantRef?: string | null | undefined } = {},
+): AiToolCtx {
   return {
     threadId: 'thread-1',
     runId: 'run-1',
@@ -27,7 +29,8 @@ function ctx(overrides: { roles?: string[]; tenantRef?: string | null } = {}): A
     actor: {
       id: 'actor-1',
       roles: overrides.roles ?? ['ANALYST'],
-      tenantRef: overrides.tenantRef as string | undefined,
+      // `null` stays PRESENT (the spec proves null is not privileged); only absent/undefined is omitted.
+      ...(overrides.tenantRef === undefined ? {} : { tenantRef: overrides.tenantRef as string }),
     },
   };
 }

@@ -48,7 +48,7 @@ function textOf(parts: ChatPart[]): string {
 
 describe('createAgentChatClient.send', () => {
   it('streams a completed turn without re-attaching', async () => {
-    const fetchImpl = vi.fn(async () =>
+    const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) =>
       fakeResponse({
         headers: { 'X-Agent-Run-Id': 'r1' },
         frames: [META('r1'), TEXT('Olá'), TEXT(' mundo'), DONE],
@@ -60,7 +60,7 @@ describe('createAgentChatClient.send', () => {
     const result = await client.send({ body: { message: 'oi' }, onRunId });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(fetchImpl.mock.calls[0][0]).toBe('/agent/chat');
+    expect(fetchImpl.mock.calls[0]![0]).toBe('/agent/chat');
     expect(textOf(result.parts)).toBe('Olá mundo');
     expect(result.runId).toBe('r1');
     expect(result.threadId).toBe('t1');
@@ -86,7 +86,7 @@ describe('createAgentChatClient.send', () => {
     const result = await client.send({ body: { message: 'oi' } });
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(fetchImpl.mock.calls[1][0]).toBe('/agent/chat/r9/stream');
+    expect(fetchImpl.mock.calls[1]![0]).toBe('/agent/chat/r9/stream');
     // Rebuilt from the replay — not "Hel" + "Hello world".
     expect(textOf(result.parts)).toBe('Hello world');
   });
@@ -120,7 +120,9 @@ describe('createAgentChatClient.send', () => {
   });
 
   it('sends merged headers (e.g. an anti-CSRF token) on every request', async () => {
-    const fetchImpl = vi.fn(async () => fakeResponse({ frames: [DONE] }));
+    const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) =>
+      fakeResponse({ frames: [DONE] }),
+    );
     const client = createAgentChatClient({
       fetch: fetchImpl as unknown as typeof fetch,
       getHeaders: () => ({ 'X-XSRF-TOKEN': 'tok' }),
@@ -128,7 +130,7 @@ describe('createAgentChatClient.send', () => {
 
     await client.send({ body: { message: 'oi' } });
 
-    const requestInit = fetchImpl.mock.calls[0][1] as RequestInit;
+    const requestInit = fetchImpl.mock.calls[0]![1] as RequestInit;
     expect((requestInit.headers as Record<string, string>)['X-XSRF-TOKEN']).toBe('tok');
     expect((requestInit.headers as Record<string, string>)['Content-Type']).toBe(
       'application/json',

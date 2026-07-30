@@ -10,7 +10,7 @@ import type { AiToolCtx } from '../src/spi/tool.js';
  * `execute`'s input and return.
  */
 class Echo extends BaseTool<{ msg: string }, string> {
-  static tool = {
+  static override tool = {
     name: 'echo',
     kind: 'read' as const,
     description: 'Devolve a mensagem recebida.',
@@ -45,7 +45,7 @@ describe('BaseTool', () => {
  * declara `kind` — sem `satisfies`, sem anotação. A descoberta lê o `kind` da estática do base.
  */
 class BareRead extends ReadTool<{ q: string }, string[]> {
-  static tool = {
+  static override tool = {
     name: 'bare_read',
     description: 'Sem kind no static tool — vem do ReadTool.',
     input: z.object({ q: z.string() }),
@@ -57,7 +57,7 @@ class BareRead extends ReadTool<{ q: string }, string[]> {
 }
 
 class BareAction extends ActionTool<{ id: string }, boolean> {
-  static tool = {
+  static override tool = {
     name: 'bare_action',
     description: 'Sem kind no static tool — vem do ActionTool.',
     input: z.object({ id: z.string() }),

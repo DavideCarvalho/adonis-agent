@@ -88,7 +88,8 @@ function governanceBootWarning(): string {
   if (warnings.length !== 1) {
     throw new Error(`expected exactly one governance console.warn, found ${warnings.length}`);
   }
-  return warnings[0];
+  // Non-null asserted: the guard above threw unless there is exactly one warning.
+  return warnings[0]!;
 }
 
 /**

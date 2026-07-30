@@ -1,7 +1,7 @@
 import type { Database } from '@adonisjs/lucid/database';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LedgerQuotaStore, LucidAgentStore, utcDay } from '../src/index.js';
-import type { Actor } from '../src/index.js';
+import type { Actor, QuotaStore } from '../src/index.js';
 import { InMemoryAgentStore } from '../src/testing/index.js';
 import { asStoreDb, makeStoreDb } from './helpers/make-db.js';
 
@@ -12,7 +12,9 @@ describe('LedgerQuotaStore (in-memory ledger)', () => {
     const store = new InMemoryAgentStore();
     const day = utcDay();
     const thread = await store.createThread({ actor, persona: 'default' });
-    const quota = new LedgerQuotaStore(store, 100);
+    // Typed as the SPI: `bump` is exercised the way the agent loop calls it (actorRef, day, tokens).
+    // `LedgerQuotaStore.bump()` declares zero params because it is a deliberate no-op.
+    const quota: QuotaStore = new LedgerQuotaStore(store, 100);
 
     expect(await quota.check('u1', day)).toEqual({
       usedTokens: 0,

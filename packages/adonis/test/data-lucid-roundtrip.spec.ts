@@ -16,7 +16,7 @@ function ctx(tenantRef?: string): AiToolCtx {
     threadId: 't',
     runId: 'r',
     requestId: 'q',
-    actor: { id: 'a', roles: ['ANALYST'], tenantRef },
+    actor: { id: 'a', roles: ['ANALYST'], ...(tenantRef === undefined ? {} : { tenantRef }) },
   };
 }
 
