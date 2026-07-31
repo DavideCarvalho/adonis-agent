@@ -1,5 +1,71 @@
 # @adonis-agora/agent-dashboard
 
+## 0.4.0
+
+### Minor Changes
+
+- [`05ea997`](https://github.com/DavideCarvalho/adonis-agent/commit/05ea997c6c9d4f20497ca0a1f81a1e09b77141b3) - O console de governança agora também se recusa a montar quando `governanceQueries: false`, não só quando falta o `governanceAuthorize`.
+
+  Os dois casos produzem o MESMO console quebrado — 10 dos 11 endpoints de leitura do console são `/agent/governance/*`, e sem read-model essas rotas não existem, então todo painel menos o Quota dá 404 no clique. Antes, `governanceQueries: false` com um gate configurado passava pela checagem de mount e servia esse console morto sem nada explicando o motivo.
+
+  **Como voltar a ter o console:** o aviso de boot agora nomeia QUAL das duas peças falta, porque as duas quebram igual e mensagem genérica não ajuda ninguém a diagnosticar.
+
+  - Faltando o gate → configure `governanceAuthorize` em `config/agent.ts` (tipicamente uma checagem de ADMIN), ou `governanceAuthorize: () => true` pra restaurar deliberadamente o comportamento antigo de deixar QUALQUER ator autenticado ler.
+  - `governanceQueries: false` → remova essa linha (omitir dá o read-model Lucid quando o store principal é Lucid) ou passe um store/factory explícito.
+  - Pra manter o console desligado de propósito e sem aviso: `dashboard: { enabled: false }`.
+
+  Só um `false` explícito em `governanceQueries` bloqueia o mount. `undefined` NÃO é esse caso: o provider do agent resolve o read-model Lucid por default quando o store principal é Lucid, então omitir a chave continua montando o console normalmente.
+
+  `GET /agent/approvals/mine` segue inalterado — montado e escopado ao ator chamador.
+
+- [`fa39b5f`](https://github.com/DavideCarvalho/adonis-agent/commit/fa39b5faef317fb47cf1fbb8fe29cec448270d21) - **If your governance console suddenly 404s, or every panel in it is failing: set `governanceAuthorize` in `config/agent.ts`.**
+
+  ```ts
+  // config/agent.ts
+  export default defineConfig({
+    // ...
+    governanceAuthorize: (actor) => actor.roles?.includes("ADMIN") ?? false,
+  });
+  ```
+
+  That one line brings both the console and its data back. If you deliberately want the old behaviour where any authenticated actor could read the platform-wide governance data, say so explicitly with `governanceAuthorize: () => true` — same effect, but greppable and reviewable.
+
+  **Why.** The cross-actor `/agent/governance/*` read routes stopped mounting without a `governanceAuthorize` gate (see the previous `@adonis-agora/agent` release). Ten of the console's eleven read endpoints are those routes, and the SPA calls them **from the browser** — so an app with the dashboard installed and no gate got a console that loaded fine and then failed on every panel except Quota, with nothing in the logs explaining it.
+
+  **What changed.** `@adonis-agora/agent-dashboard` now refuses to mount when the agent config has no `governanceAuthorize`, and logs a boot warning naming both fixes above. The console URL returns `404` instead of serving a shell that cannot work. Nothing that still worked is broken by this: every affected app already had a console dead in six of its seven views.
+
+  Unaffected:
+
+  - Apps that already set `governanceAuthorize` — no change whatsoever.
+  - `dashboard: { enabled: false }` — still off, still silent, no warning.
+  - `dashboard.authorize` — still an optional EXTRA gate on the SPA shell, unchanged. It is deliberately not what decides whether the console mounts: it gates the shell, not the data, so an app could set it and still have a console with nothing to render.
+  - `GET /agent/approvals/mine` — never behind the governance gate; still mounted and still scoped to the calling actor.
+
+  The `@adonis-agora/agent` half of this release is documentation only: the `governanceAuthorize` JSDoc and the `governance-gate.ts` comments still described the old open-by-default behaviour they no longer have. `evaluateGovernanceGate`'s behaviour is unchanged.
+
+### Patch Changes
+
+- [`63b9b08`](https://github.com/DavideCarvalho/adonis-agent/commit/63b9b08caa19a092965a465612215254fbb14997) - **No published version of either package is affected.** This is a repo-tooling fix with no runtime change — nothing in `src/` moved. Checked rather than assumed: the live tarballs for `@adonis-agora/agent@0.17.0` and `@adonis-agora/agent-dashboard@0.3.2` contain 105 and 13 `.js` files respectively, exactly what a full local build emits. The release workflow publishes from a cold `actions/checkout`, which has no `dist/` and no `.tsbuildinfo` to go stale, so the defect below could not reach npm. It could reach a contributor's working copy, and did.
+
+  `pnpm build` could exit `0` having emitted no JavaScript. `tsc` ran with `incremental: true` against a `.tsbuildinfo` that records what it already wrote to `dist/`; delete `dist/` and leave the buildinfo behind and `tsc` concludes every output is current and emits nothing. In `@adonis-agora/agent`, `copy:stubs` is a plain `cp` and ran anyway, so `dist/` came out holding four stub files and zero `.js`. Turbo then cached that empty directory as a _successful_ `build` and replayed it onto clean trees — a later `pnpm build` on a freshly wiped checkout restored the vacuum as `FULL TURBO` in 32ms. Downstream, `packages/dashboard` failed with `TS2307: Cannot find module '@adonis-agora/agent'` against the package that had just "built".
+
+  Both packages are fixed the same way:
+
+  - `build` removes `dist/` up front and compiles through a new `tsconfig.build.json` with `incremental: false`, so an emit is always a full emit and no state survives to disagree with `dist/`.
+  - A new `scripts/assert-build-output.mjs` runs as the last step of `build` and fails it if `dist/` holds no JavaScript or is missing the package entrypoint. It runs inside the build, so it also covers `prepack` — which never goes through turbo, and is the path a manual `pnpm publish` would take.
+  - `build` and `typecheck` no longer share a buildinfo. `typecheck` keeps `.typecheck.tsbuildinfo`; `build` keeps none at all. `turbo.json` is unchanged.
+
+  If you have a checkout in the broken state, the guard now prints the way out — and the command it prints works, which took a second pass to get right: the buildinfo files are dotfiles and a shell `*` does not match those.
+
+  ```
+  rm -rf dist .*tsbuildinfo *.tsbuildinfo
+  pnpm run build
+  ```
+
+  The dashboard's exposure needed a different guard. Its `build` is `vite build && tsc`, and vite keeps populating `dist/spa/` whatever `tsc` does — a `dist/` with no provider in it still holds a dozen `.js` files. Counting JavaScript would have passed it, so `check:dist` there asserts the entrypoint by name.
+
+  Neither a count nor a named entrypoint is enough on its own. A _partial_ emit was observed during this fix: `dist/` came out holding exactly one `.js`, `src/index.js`, which satisfies both checks — and because `index.d.ts` was there too, the dashboard compiled against it without a single `TS2307`. Every subpath export (`@adonis-agora/agent/rag-media`, `/durable`, `/testing`, …) pointed at a file that did not exist, and the first thing to notice would have been a consumer's failed import. So the guard also walks `package.json`'s `exports` and requires every target it declares. That list is the package's real publish contract, and it maintains itself — adding an export adds a post-condition, with nobody having to remember. It also covers `@adonis-agora/agent-dashboard/client`, which the by-name check never looked at.
+
 ## 0.3.2
 
 ### Patch Changes
