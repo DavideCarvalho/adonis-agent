@@ -78,6 +78,51 @@ describe('build post-condition', () => {
     expect(stderr).toContain('src/index.js');
   });
 
+  it('fails when the root entrypoint survives a partial emit but the subpath exports do not', () => {
+    // The complement of the case above, and the one actually observed: a partial emit left
+    // `src/index.js` alone in dist. Count passes, entrypoint passes — and every subpath export
+    // (`@pkg/agent/rag-media`, …) resolves to a file that is not there. Only the consumer finds out.
+    mkdirSync(join(workDir, 'dist', 'src'), { recursive: true });
+    writeFileSync(join(workDir, 'dist', 'src', 'index.js'), 'export const ok = true;\n');
+    writeFileSync(
+      join(workDir, 'package.json'),
+      JSON.stringify({
+        exports: {
+          '.': { import: './dist/src/index.js' },
+          './rag-media': { import: './dist/src/rag-media/index.js' },
+        },
+      }),
+    );
+
+    const { status, stderr } = runGuard('dist', 'src/index.js');
+
+    expect(status).toBe(1);
+    expect(stderr).toContain('partial emit');
+    expect(stderr).toContain('./dist/src/rag-media/index.js');
+    // The one that DID survive must not be reported as missing.
+    expect(stderr).not.toContain('  ./dist/src/index.js');
+  });
+
+  it('passes when every path declared in exports exists', () => {
+    mkdirSync(join(workDir, 'dist', 'src', 'rag-media'), { recursive: true });
+    writeFileSync(join(workDir, 'dist', 'src', 'index.js'), 'export const ok = true;\n');
+    writeFileSync(
+      join(workDir, 'dist', 'src', 'rag-media', 'index.js'),
+      'export const ok = true;\n',
+    );
+    writeFileSync(
+      join(workDir, 'package.json'),
+      JSON.stringify({
+        exports: {
+          '.': { import: './dist/src/index.js' },
+          './rag-media': { import: './dist/src/rag-media/index.js' },
+        },
+      }),
+    );
+
+    expect(runGuard('dist', 'src/index.js').status).toBe(0);
+  });
+
   it('names a recovery command that actually removes the stale state it points at', () => {
     // The buildinfo files are dotfiles. A bare `*.tsbuildinfo` in the hint would not match them,
     // so following the advice would leave the tree exactly as broken as before.

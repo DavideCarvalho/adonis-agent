@@ -15,12 +15,20 @@
  * inside the build itself, so it protects the `prepack` path too, and it fires before
  * turbo can write a vacuum into the cache.
  *
+ * A count alone is not enough. A partial emit that produced only the root entrypoint
+ * still satisfies "dist has JavaScript" *and* "the entrypoint is there", while every
+ * subpath export (`@pkg/agent/rag-media`, …) resolves to a file that does not exist —
+ * and consumers, not this build, are the ones who find out. So the check also walks
+ * `package.json`'s `exports` and requires every target it declares. That list is the
+ * package's actual publish contract, and it extends itself: adding an export adds a
+ * post-condition without anyone remembering to.
+ *
  * Usage, from a package directory:
  *   node ../../scripts/assert-build-output.mjs <dist-dir> [required-file...]
  * where required files are relative to <dist-dir>.
  */
 
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 const [distArg, ...requiredFiles] = process.argv.slice(2);
@@ -76,6 +84,37 @@ for (const required of requiredFiles) {
     fail(
       `${distArg} is missing the required entrypoint ${required}, though it does ` +
         `contain ${jsFiles} .js file(s).\n\n${recovery}`,
+    );
+  }
+}
+
+/** Every string leaf under `exports` that points at a file in this package. */
+function collectExportTargets(node, into) {
+  if (typeof node === 'string') {
+    if (node.startsWith('./')) into.add(node);
+    return into;
+  }
+  if (node && typeof node === 'object') {
+    for (const value of Object.values(node)) collectExportTargets(value, into);
+  }
+  return into;
+}
+
+const pkgPath = resolve(cwd, 'package.json');
+if (existsSync(pkgPath)) {
+  const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+  const targets = [...collectExportTargets(pkg.exports ?? {}, new Set())].sort();
+  const missing = targets.filter((target) => !existsSync(resolve(cwd, target)));
+  if (missing.length > 0) {
+    fail(
+      [
+        `${missing.length} of ${targets.length} paths declared in package.json "exports" do not`,
+        `exist after the build, though ${distArg} contains ${jsFiles} .js file(s) — this is a`,
+        'partial emit. Importing these subpaths would fail for consumers:',
+        ...missing.map((target) => `  ${target}`),
+        '',
+        recovery,
+      ].join('\n'),
     );
   }
 }
