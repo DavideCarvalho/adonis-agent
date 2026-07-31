@@ -1,9 +1,17 @@
 {
+  // The typecheck/editor config for the node-side sources. `tsconfig.build.json` is the
+  // emitting build; it extends this one and turns `incremental` off.
+  //
+  // The two must not share a buildinfo: an incremental *emitting* build records what it
+  // already wrote to `dist/`, so deleting `dist/` and leaving the buildinfo makes tsc emit
+  // nothing and exit 0 — with `vite build` still populating `dist/spa`, the result looks
+  // built and has no provider in it. `turbo.json`'s `typecheck` task owns the
+  // `*.tsbuildinfo` files; `build` now keeps none at all.
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": ".",
     "outDir": "dist",
-    "tsBuildInfoFile": ".tsbuildinfo",
+    "tsBuildInfoFile": ".typecheck.tsbuildinfo",
     "types": ["node"],
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
