@@ -1,5 +1,138 @@
 # @adonis-agora/agent
 
+## 0.18.0
+
+### Minor Changes
+
+- [`634c2df`](https://github.com/DavideCarvalho/adonis-agent/commit/634c2df384e90df85014d0ddb8e9c2215bb4c7b1) - **Security fix**: the cross-actor `/agent/governance/*` read-model is no longer mounted when no `governanceAuthorize` gate is configured.
+
+  Previously these routes mounted whenever the governance read-model resolved — which happens **by default** whenever the main store is Lucid — and the `governanceAuthorize` gate was optional. With no gate, the gate evaluated to "allow", so **every authenticated actor could read the platform-wide governance data: every actor's spend, token usage, thread activity, run traces and pending HITL approvals.** Apps that never configured a gate got this by taking the default; the library only printed a boot warning, which is not a control. If your app has ordinary end users (not just trusted staff) as resolved actors, assume this data was readable by any of them.
+
+  The cross-actor routes now mount **only when `governanceAuthorize` is set**. Without a gate they do not exist and return `404`. Affected routes:
+
+  `GET /agent/governance/spend/model`, `spend/actor`, `usage/trend`, `tool-calls/recent`, `threads/recent`, `runs`, `runs/:id`, `approvals/pending`, `tools/stats`, `reliability`.
+
+  **`GET /agent/approvals/mine` is unaffected.** It keeps mounting whenever the governance read-model resolves, gate or no gate — it is always scoped to the calling actor's own pending approvals, and non-admin surfaces (e.g. a chat page polling for its own suspended tool calls) depend on it.
+
+  Two migration paths, both in `config/agent.ts`:
+
+  ```ts
+  // 1. The intended fix — mount the routes gated (typically an ADMIN check):
+  governanceAuthorize: (actor) => actor.roles?.includes('ADMIN') ?? false,
+
+  // 2. Deliberately keep the old open behaviour — explicit, greppable, reviewable:
+  governanceAuthorize: () => true,
+  ```
+
+  Boot still succeeds without a gate: the provider warns (it does not throw) and names both paths.
+
+- [`38106a9`](https://github.com/DavideCarvalho/adonis-agent/commit/38106a9d981b770dd755a2779810e27aa2a890f6) Thanks [@claude](https://github.com/claude)! - Three RAG capabilities: metadata that can be corrected without re-embedding, enumeration and bulk deletion that don't walk the corpus document-by-document, and a chunker that can be told where the records are.
+
+  **`updateMetadata(documentId, patch)` — change a document's metadata without paying to re-embed it.** Optional on `VectorStore`, implemented by all three shipped stores, resolving to the number of chunks written. Until now the only way to change a chunk's metadata was `upsert`, which needs the text and a fresh embedding — so a consumer whose documents get re-classified had to choose between re-embedding a whole document to change one label, or not stamping the mutable dimension onto chunks at all and resolving it at query time instead, which turns a filter the index could apply into a join the caller has to do. The second is the one people actually pick, and it is what makes an actor-derived retrieval filter unaffordable: such a filter only pays off if the dimensions it filters on are _on_ the chunks and can be corrected when they change. `patch` is a **shallow JSON Merge Patch** — `null` deletes a key (said in those words on `MetadataPatch`, because "patch" alone does not tell you whether `null` deletes or stores a null), values replaced wholesale, `undefined` ignored, absent keys left alone. Text and embeddings are untouched; on pgvector the merge happens in SQL so `SET` structurally cannot name the embedding column, and on Qdrant it goes through `set_payload`, which has no vector field at all. Verified against Postgres 17 + pgvector 0.8.5 and Qdrant 1.18 asserting the stored vector is byte-identical afterwards.
+
+  **`listDocumentIds(filter?)` and `removeWhere(filter)` — enumerate and drop in bulk, without a document-by-document walk.** Both optional on `VectorStore`, both on all three stores. Dropping a collection used to mean `listDocuments()` — which fetches and JSON-parses a metadata blob _per chunk_ only to collapse it to one entry per document — followed by one `remove()` per document: N+1 round trips where one filtered delete would do. (The Qdrant adapter had already grown a defensive page cap on that `listDocuments` scroll, which is the tell that an enumeration API was carrying work it is not shaped for.) `listDocumentIds` skips the per-chunk metadata entirely — a `SELECT DISTINCT` on pgvector, a one-key scroll on Qdrant. `removeWhere` deletes in one filtered statement and reports how many chunks went.
+
+  Because `removeWhere` is the only call here that destroys data, it removes **exactly what a `search` carrying the same filter could reach, and never more**: every store builds the delete predicate with the very same filter builder its `search` uses, so the two cannot drift. The empty-array deny is honoured and means "delete nothing", not "no filter". And `removeWhere({})` throws `UnsafeRemovalError` instead of wiping the store, because an empty object is far more likely to be a filter that got built wrong than a deliberate request to delete everything — deliberate mass deletion stays explicit via `remove` over `listDocumentIds()`.
+
+  **`chunkText(text, { separator })` — cut on the record boundary instead of guessing one.** The chunker breaks on the latest paragraph/sentence/word boundary in its window, which is right for prose and wrong for text whose boundaries _mean_ something: a spreadsheet flattened to one field-labelled record per line gets cut mid-record, so the half holding the row identifier lands in a different chunk from the half holding the value and neither can answer a question about that row. Pass `separator` and it becomes the only boundary the chunker may cut on. Two consequences, documented on the option: a record longer than `chunkSize` is emitted **whole** as its own over-size chunk rather than being cut (`chunkSize` becomes a target, not a cap — falling back to a mid-record cut would defeat the point, and an over-size chunk is visible where a mangled record is not), and `overlap` becomes a character _budget_ spent on whole trailing records, never a partial one. Reaches `ingestDocuments` for free.
+
+  Nothing changes for existing callers: omit `separator` and the prose path is byte-for-byte what it was — guarded by frozen boundary cases and confirmed by a differential run over 20,000 random input × option combinations, because a shifted chunk boundary silently invalidates stored embeddings and is not something a minor release may do. All three store operations are **optional** on the `VectorStore` interface, so a host-written store that implements none of them still compiles.
+
+- [`6d0d746`](https://github.com/DavideCarvalho/adonis-agent/commit/6d0d746ebe88da5f7931059ea544a5d2b63b7679) - **Security-relevant feature**: inject-mode RAG retrieval can now be scoped per actor via the new `retrievalFilter` config option — and **without it, retrieval remains unscoped**.
+
+  Inject-mode RAG (setting `retriever` in `config/agent.ts`) retrieves passages for the user's message and folds them into the system prompt on every turn, but had no seam through which a host could supply a filter: `retriever.retrieve(text, { topK })` was called with no `filter` and no actor, so a host could not scope it even by wrapping the retriever. Any deployment that turns on `retriever` and shares one corpus across tenants was leaking passages across tenants into the system prompt, on every turn, for every user — the write side (`rag-media` ingestion tagging `tenantRef`/`ownerId`) and the store-level `filter` support (`pgvector`/Qdrant, both correct) already existed; nothing ever populated `filter`.
+
+  `retrievalFilter?: (actor: Actor) => Record<string, unknown>` closes that gap: it derives the same `audience`-style ACL filter documented for manual/agentic retrieval, but from the run's actor, and applies it automatically inside the existing `hooks.step('retrieve', …)` (so durable replay determinism is unaffected). With no hook configured, the retriever receives options with no `filter` key at all (not `filter: undefined`) — existing single-tenant deployments are byte-identical. A hook that throws fails the turn rather than falling back to unfiltered retrieval.
+
+  **Action for existing multi-tenant deployments using inject mode**: set `retrievalFilter` in `config/agent.ts`. Without it, you may have been retrieving across your entire corpus regardless of who is asking. See `docs/retrieval/rag.mdx`.
+
+  Deliberately out of scope: the `Retriever` SPI is unchanged (third-party retrievers still satisfy it unmodified), and retrieved passages are still folded into the system prompt without fencing as untrusted data — the second half of this finding, tracked separately.
+
+### Patch Changes
+
+- [`63b9b08`](https://github.com/DavideCarvalho/adonis-agent/commit/63b9b08caa19a092965a465612215254fbb14997) - **No published version of either package is affected.** This is a repo-tooling fix with no runtime change — nothing in `src/` moved. Checked rather than assumed: the live tarballs for `@adonis-agora/agent@0.17.0` and `@adonis-agora/agent-dashboard@0.3.2` contain 105 and 13 `.js` files respectively, exactly what a full local build emits. The release workflow publishes from a cold `actions/checkout`, which has no `dist/` and no `.tsbuildinfo` to go stale, so the defect below could not reach npm. It could reach a contributor's working copy, and did.
+
+  `pnpm build` could exit `0` having emitted no JavaScript. `tsc` ran with `incremental: true` against a `.tsbuildinfo` that records what it already wrote to `dist/`; delete `dist/` and leave the buildinfo behind and `tsc` concludes every output is current and emits nothing. In `@adonis-agora/agent`, `copy:stubs` is a plain `cp` and ran anyway, so `dist/` came out holding four stub files and zero `.js`. Turbo then cached that empty directory as a _successful_ `build` and replayed it onto clean trees — a later `pnpm build` on a freshly wiped checkout restored the vacuum as `FULL TURBO` in 32ms. Downstream, `packages/dashboard` failed with `TS2307: Cannot find module '@adonis-agora/agent'` against the package that had just "built".
+
+  Both packages are fixed the same way:
+
+  - `build` removes `dist/` up front and compiles through a new `tsconfig.build.json` with `incremental: false`, so an emit is always a full emit and no state survives to disagree with `dist/`.
+  - A new `scripts/assert-build-output.mjs` runs as the last step of `build` and fails it if `dist/` holds no JavaScript or is missing the package entrypoint. It runs inside the build, so it also covers `prepack` — which never goes through turbo, and is the path a manual `pnpm publish` would take.
+  - `build` and `typecheck` no longer share a buildinfo. `typecheck` keeps `.typecheck.tsbuildinfo`; `build` keeps none at all. `turbo.json` is unchanged.
+
+  If you have a checkout in the broken state, the guard now prints the way out — and the command it prints works, which took a second pass to get right: the buildinfo files are dotfiles and a shell `*` does not match those.
+
+  ```
+  rm -rf dist .*tsbuildinfo *.tsbuildinfo
+  pnpm run build
+  ```
+
+  The dashboard's exposure needed a different guard. Its `build` is `vite build && tsc`, and vite keeps populating `dist/spa/` whatever `tsc` does — a `dist/` with no provider in it still holds a dozen `.js` files. Counting JavaScript would have passed it, so `check:dist` there asserts the entrypoint by name.
+
+  Neither a count nor a named entrypoint is enough on its own. A _partial_ emit was observed during this fix: `dist/` came out holding exactly one `.js`, `src/index.js`, which satisfies both checks — and because `index.d.ts` was there too, the dashboard compiled against it without a single `TS2307`. Every subpath export (`@adonis-agora/agent/rag-media`, `/durable`, `/testing`, …) pointed at a file that did not exist, and the first thing to notice would have been a consumer's failed import. So the guard also walks `package.json`'s `exports` and requires every target it declares. That list is the package's real publish contract, and it maintains itself — adding an export adds a post-condition, with nobody having to remember. It also covers `@adonis-agora/agent-dashboard/client`, which the by-name check never looked at.
+
+- [`fa39b5f`](https://github.com/DavideCarvalho/adonis-agent/commit/fa39b5faef317fb47cf1fbb8fe29cec448270d21) - **If your governance console suddenly 404s, or every panel in it is failing: set `governanceAuthorize` in `config/agent.ts`.**
+
+  ```ts
+  // config/agent.ts
+  export default defineConfig({
+    // ...
+    governanceAuthorize: (actor) => actor.roles?.includes("ADMIN") ?? false,
+  });
+  ```
+
+  That one line brings both the console and its data back. If you deliberately want the old behaviour where any authenticated actor could read the platform-wide governance data, say so explicitly with `governanceAuthorize: () => true` — same effect, but greppable and reviewable.
+
+  **Why.** The cross-actor `/agent/governance/*` read routes stopped mounting without a `governanceAuthorize` gate (see the previous `@adonis-agora/agent` release). Ten of the console's eleven read endpoints are those routes, and the SPA calls them **from the browser** — so an app with the dashboard installed and no gate got a console that loaded fine and then failed on every panel except Quota, with nothing in the logs explaining it.
+
+  **What changed.** `@adonis-agora/agent-dashboard` now refuses to mount when the agent config has no `governanceAuthorize`, and logs a boot warning naming both fixes above. The console URL returns `404` instead of serving a shell that cannot work. Nothing that still worked is broken by this: every affected app already had a console dead in six of its seven views.
+
+  Unaffected:
+
+  - Apps that already set `governanceAuthorize` — no change whatsoever.
+  - `dashboard: { enabled: false }` — still off, still silent, no warning.
+  - `dashboard.authorize` — still an optional EXTRA gate on the SPA shell, unchanged. It is deliberately not what decides whether the console mounts: it gates the shell, not the data, so an app could set it and still have a console with nothing to render.
+  - `GET /agent/approvals/mine` — never behind the governance gate; still mounted and still scoped to the calling actor.
+
+  The `@adonis-agora/agent` half of this release is documentation only: the `governanceAuthorize` JSDoc and the `governance-gate.ts` comments still described the old open-by-default behaviour they no longer have. `evaluateGovernanceGate`'s behaviour is unchanged.
+
+- [`58177f7`](https://github.com/DavideCarvalho/adonis-agent/commit/58177f718477ecdda362b6870b25225cff391759) - **Security fix**: `agent`-kind delegate tool calls now go through the same role/ability check and allow-list filter as every other tool call, instead of executing unconditionally.
+
+  Previously, when the model emitted a tool call for an `agent`-kind (delegation) tool, the loop called `hooks.runAgent` directly at the loop level — it never went through `ToolRegistry.invoke`, so the `policy.can(actor, spec)` re-check, the Zod input validation, and the persona/agent allow-list filter (only applied when building the offered-tools set) were all skipped. A model steered by injected content — delegate tool names are advertised in sibling delegate descriptions — could name a delegate tool it was never offered and run it regardless of the actor's role or the agent's configured allow-list. The synthesized delegate specs carry no `roles` and no `ability`, so they were meant to be unreachable by a non-privileged actor; the loop ran them anyway.
+
+  The delegation branch now: (1) fails closed if the delegate's spec cannot be resolved; (2) verifies the tool name is in the set actually offered to the model (the same persona/agent allow-list intersection used to build the offer); (3) re-checks `rolesPolicy.can(actor, spec)`. All three checks run _before_ the tool call is persisted and before the `agent.delegated` event is published, so a denied delegation is recorded `failed` — never `auto_executed`, even transiently.
+
+  **Behaviour change for hosts using `AuthzToolAuthorizer`**: delegate tools carry no `ability` by design. Under an authz posture, a tool with no `ability` is _always_ denied — so after this fix, delegation will be denied for any actor unless the host explicitly declares an `ability` on its delegate tools. This is not a regression: it is what an authz-backed configuration with no `ability` on these tools always meant. Hosts that rely on delegation under `AuthzToolAuthorizer` need to declare an `ability` for their delegate tools (or otherwise grant it through their policy) to keep delegation working.
+
+- [`3627aec`](https://github.com/DavideCarvalho/adonis-agent/commit/3627aece5817f93518154133b07a29fb4068e1ff) - `node ace add @adonis-agora/agent` now actually registers the provider and publishes the config and migration stubs, instead of silently warning "the module does not export the configure hook" and doing nothing. AdonisJS resolves the configure hook by importing the package's main entry and reading `configure` off the module namespace — it never reads the `./configure` subpath. The package main now re-exports `configure` from the package root so `node ace configure` finds it.
+
+- [`f4f3fb1`](https://github.com/DavideCarvalho/adonis-agent/commit/f4f3fb1cdd0117f5a748a3088d4fdc032d6fa7fc) - **Security fix**: `dataTool`'s tenant scoping no longer treats a tenant predicate found under an `OR` as coverage.
+
+  `TenantScopeRewriter.collectTenantPredicates` recursed into `OR` branches exactly as it did into `AND` branches, with no record of which boolean context it was in. Any tenant predicate found anywhere in a query's `WHERE` tree — including inside an `OR` — marked that table's alias "already scoped", so the rewriter added no constraint at all. A model-authored query of the form `... WHERE base_id = '<own tenant>' OR 1 = 1` (or any other disjunctive shape naming the caller's own tenant) passed through unconstrained and returned every tenant's rows from an allow-listed table.
+
+  Coverage is now computed from the top-level `AND` spine only (`collectConjunctiveTenantPredicates`): a predicate under an `OR`, `NOT`, or any non-conjunctive operator no longer suppresses the AND-ed tenant constraint. The **mismatch rejection** is unchanged and deliberately still walks the _whole_ tree (`collectAllTenantPredicates`): a query naming a foreign tenant anywhere — even inside an `OR` — still throws `tenant scope: tenant mismatch`, rather than being silently AND-ed down to zero rows.
+
+  **Behaviour change**: queries that previously passed through unconstrained because of an `OR`-side tenant predicate (e.g. `WHERE base_id = 'mine' OR 1 = 1`, `WHERE (base_id = 'mine' AND x) OR y`) are now correctly constrained — the emitted SQL gains an additional `AND <tenantColumn> = '<tenantRef>'`. A query whose tenant predicate is already on the top-level `AND` spine is unaffected (no duplicate predicate is added).
+
+  A second, adjacent bug was found and fixed while implementing this: `andCondition` built the AND-tenant-predicate AST node without marking the pre-existing (possibly `OR`-rooted) `WHERE` as parenthesized. `node-sql-parser`'s printer only wraps a subexpression in `(...)` when a `parentheses` flag is explicitly set on it — without it, `AND`/`OR` print at the same precedence, left-to-right, so a real database (which applies standard SQL precedence, `AND` binding tighter than `OR`) would have misread the emitted text and applied the tenant constraint to only the last disjunct, silently re-opening the same bypass this fix closes. `andCondition` now always parenthesizes the existing WHERE before AND-ing.
+
+- [`258e322`](https://github.com/DavideCarvalho/adonis-agent/commit/258e322c8454020f52d110b328514ff5478c1a60) - Delegation now applies the input-schema gate, closing the last of the three gates `ToolRegistry.invoke` applies.
+
+  `invoke` gates every tool call on (1) the role/ability check, (2) input validation against `spec.inputSchema`, then (3) execution. `agent`-kind (delegate) calls are handled at the loop level and deliberately bypass `invoke` — the durable runner maps them to `ctx.child`, a ctx-level suspend point. The previous fix re-applied the role and allow-list gates to that branch but not the input gate, so a malformed delegate input was silently coerced instead of rejected: `extractTask` fell back to `JSON.stringify(input)`, and a model emitting `{ task: { nested: 1 } }` or `{ tsak: '...' }` delegated a JSON blob as the task string. Every other tool kind rejects that with `ToolInputInvalidError`.
+
+  The delegation branch now validates `call.input` against the delegate spec's `inputSchema` and throws the same `ToolInputInvalidError`, after the role and allow-list checks so the ordering matches `invoke` (authorization first, then shape). The task handed to the target agent is derived from the validated value rather than the raw input. A rejected input lands in the existing `try/catch`, so it is recorded `failed` and never emits `agent.delegated`.
+
+  This only rejects inputs that were previously mis-coerced; no public signature changes.
+
+- [`c78c0f4`](https://github.com/DavideCarvalho/adonis-agent/commit/c78c0f4a1897f7aab5caf3ceb7857927dde934a6) - The optional `@adonis-agora/*` peer ranges (`authz`, `diagnostics`, `durable`, `telescope`) no longer point at a single already-superseded minor. On a `0.x` package `^0.x.y` means "this exact minor only," so every sibling minor bump silently made these ranges unsatisfiable against what's published on npm — a consumer installing any current sibling version got an `ERESOLVE`/warning wall. Ranges now use `>=<floor> <1.0.0`, matching the pattern already used by `agent-dashboard`'s peer on `agent` and `authz-react`'s peer on `authz`. The floor for each is the version this package was actually verified against (the one the dev install had resolved), not the current published version:
+
+  - `@adonis-agora/authz`: `>=0.4.2 <1.0.0`
+  - `@adonis-agora/diagnostics`: `>=0.1.0 <1.0.0`
+  - `@adonis-agora/durable`: `>=0.8.0 <1.0.0`
+  - `@adonis-agora/telescope`: `>=0.4.0 <1.0.0`
+
+  The matching devDependencies were bumped to the current published versions (durable 0.20.0, telescope 0.6.0, authz 0.10.1, diagnostics 0.2.5) so this repo's typecheck and test suite actually run against current sibling APIs instead of many minors behind. No source changes were required — the integration code under `durable/`, `telescope/`, `authz/` and `diagnostics.ts` typechecked and passed its tests unchanged against the newer siblings.
+
 ## 0.17.0
 
 ### Minor Changes
