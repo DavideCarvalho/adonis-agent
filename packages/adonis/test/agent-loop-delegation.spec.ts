@@ -91,7 +91,7 @@ async function run(
     openSink: () => sink.open(runId),
     awaitApproval: async () => ({ approved: true }),
     step: (_name, fn) => fn(),
-    runAgent: runAgent as unknown as NonNullable<AgentLoopHooks['runAgent']>,
+    runAgent,
   };
   const result = await runAgentLoop(
     deps,
@@ -241,7 +241,7 @@ describe('runAgentLoop — delegation (agent-kind tool call) authorization', () 
       openSink: () => sink.open(runId),
       awaitApproval: async () => ({ approved: true }),
       step: (_name, fn) => fn(),
-      runAgent: runAgent as unknown as NonNullable<AgentLoopHooks['runAgent']>,
+      runAgent,
     };
 
     await runAgentLoop(deps, { threadId: thread.id, actor, userText: 'please ask billing' }, hooks);
