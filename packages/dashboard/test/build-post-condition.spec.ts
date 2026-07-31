@@ -20,6 +20,19 @@ describe('dashboard build post-condition', () => {
     expect(pkg.scripts['check:dist']).toContain('assert-build-output.mjs');
   });
 
+  it('has a prepack that verifies rather than rebuilds', () => {
+    // This one is a scar. `prepack` used to be `pnpm run build`, which was harmless until `build`
+    // gained `clean`. Then `changeset publish` — which packs both workspace packages concurrently —
+    // had `packages/adonis`'s prepack run `rm -rf dist` while THIS package's `vite build` + `tsc`
+    // were resolving `@adonis-agora/agent` out of that very directory. Result: agent@0.18.0
+    // published and agent-dashboard@0.4.0 died, with no output past its own `rm -rf dist`.
+    //
+    // The release workflow already runs a full build before publishing, so prepack's job is to
+    // REFUSE a bad dist, not to produce one. Verification is idempotent and touches nothing.
+    expect(pkg.scripts.prepack).toBe('pnpm run check:dist');
+    expect(pkg.scripts.prepack).not.toContain('build');
+  });
+
   it('asserts the entrypoint by name, not just that some JavaScript exists', () => {
     // vite's output would satisfy a count on its own. The name is the whole point.
     const entrypoint = pkg.main.replace(/^\.\/dist\//, '');

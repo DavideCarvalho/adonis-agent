@@ -35,7 +35,7 @@
     "build": "pnpm run clean && vite build && tsc -p tsconfig.build.json && pnpm run check:dist",
     "check:dist": "node ../../scripts/assert-build-output.mjs dist providers/agent_dashboard_provider.js",
     "clean": "rm -rf dist",
-    "prepack": "pnpm run build",
+    "prepack": "pnpm run check:dist",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.tests.json"

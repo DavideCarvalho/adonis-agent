@@ -149,6 +149,20 @@ describe('build post-condition', () => {
     expect(build).toContain('tsconfig.build.json');
   });
 
+  it('has a prepack that verifies rather than rebuilds', () => {
+    // `prepack: pnpm run build` was harmless until `build` gained `clean`. Then `changeset publish`,
+    // which packs both workspace packages concurrently, had THIS package's prepack `rm -rf dist`
+    // while `packages/dashboard` was compiling against `@adonis-agora/agent` out of that directory.
+    // agent@0.18.0 published; agent-dashboard@0.4.0 failed. Verification is idempotent; a
+    // destructive rebuild at pack time is not.
+    const pkg = JSON.parse(
+      readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
+    ) as { scripts: Record<string, string> };
+
+    expect(pkg.scripts.prepack).toBe('pnpm run check:dist');
+    expect(pkg.scripts.prepack).not.toContain('build');
+  });
+
   it('builds through a config that cannot keep incremental state', () => {
     const buildConfig = JSON.parse(
       readFileSync(fileURLToPath(new URL('../tsconfig.build.json', import.meta.url)), 'utf8'),
