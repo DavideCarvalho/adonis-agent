@@ -8,13 +8,13 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { DefaultToolAuthorizer } from '../src/authorizer.js';
+import { actorFromAuthInfo } from '../src/mcp/actor.js';
 import { resolveMcpAuth } from '../src/mcp/auth.js';
-import type { McpAuth } from '../src/mcp/auth.js';
+import type { McpAuth, McpAuthInfo } from '../src/mcp/auth.js';
 import type { McpConfig } from '../src/mcp/define_config.js';
 import { createMcpServer } from '../src/mcp/server.js';
 import type { RolesPolicy } from '../src/spi/roles-policy.js';
 import { ToolRegistry } from '../src/tool-registry.js';
-import type { Actor } from '../src/types.js';
 
 /**
  * Wires the agent's {@link ToolRegistry} to the outside world over the Model Context Protocol
@@ -88,7 +88,7 @@ export default class McpProvider {
     ctx: HttpContext,
     auth: McpAuth | undefined,
     openActor: McpConfig['actor'],
-  ): Promise<AuthInfo | null> {
+  ): Promise<McpAuthInfo | null> {
     const header = ctx.request.header('authorization');
     const token = header?.startsWith('Bearer ') ? header.slice(7).trim() : undefined;
     if (auth !== undefined) {
@@ -248,28 +248,4 @@ export default class McpProvider {
       res.on('close', () => resolve());
     });
   }
-}
-
-/**
- * Read the acting {@link Actor} from the transport's verified `AuthInfo` — the auth strategies
- * (`authKitAuth`/`apiKeyAuth`) and the open-mode fallback all attach it to `extra.actor`. Throws when
- * absent or malformed so a request without a resolvable identity never reaches the tool registry.
- */
-function actorFromAuthInfo(authInfo: AuthInfo | undefined): Actor {
-  const actor = authInfo?.extra?.actor;
-  if (!isActor(actor)) {
-    throw new Error('unauthorized: no actor associated with this MCP request');
-  }
-  return actor;
-}
-
-/** Runtime shape check for the {@link Actor} attached to an MCP `AuthInfo.extra`. */
-function isActor(value: unknown): value is Actor {
-  if (typeof value !== 'object' || value === null) return false;
-  const candidate = value as Partial<Actor>;
-  if (typeof candidate.id !== 'string') return false;
-  if (candidate.roles === undefined) return true;
-  return (
-    Array.isArray(candidate.roles) && candidate.roles.every((role) => typeof role === 'string')
-  );
 }

@@ -94,6 +94,10 @@ function toJsonSchema(schema: StandardSchemaV1): Record<string, unknown> {
  *   before the handler runs (the registry's own defense-in-depth), so a stale tool list can never
  *   bypass the gate.
  *
+ * The acting actor comes from the verified auth's `extra.authInfo`: the MCP auth strategies
+ * (`authKitAuth`/`apiKeyAuth`) attach it to `extra.actor` as a typed `McpAuthInfo`, and `actorFromAuth`
+ * resolves it (e.g. with the library's `actorFromAuthInfo` helper) before the gate runs.
+ *
  * Use this in the MCP provider (one server per session, connected to that session's transport).
  */
 export function createMcpServer(options: CreateMcpServerOptions): Server {

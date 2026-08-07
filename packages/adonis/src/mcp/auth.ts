@@ -29,16 +29,27 @@ export interface McpOAuthMetadata {
 }
 
 /**
+ * MCP `AuthInfo` with a typed acting {@link Actor} in `extra`. The MCP auth strategies
+ * (`authKitAuth`/`apiKeyAuth`) and the open-mode fallback all produce this shape, so consumers can
+ * read `extra.actor` without a runtime guard — or resolve it from a generic SDK `AuthInfo` with
+ * `actorFromAuthInfo`.
+ */
+export interface McpAuthInfo extends Omit<AuthInfo, 'extra'> {
+  extra: { actor: Actor };
+}
+
+/**
  * A configured MCP auth strategy. `verify` validates a bearer token and resolves the acting {@link Actor}
- * (attached to `AuthInfo.extra.actor`); it MUST throw when the token is missing/invalid/expired. The
- * same `AuthInfo` is surfaced to the `tools/list` / `tools/call` handlers as `extra.authInfo`, so the
- * actor the tool registry gates against is exactly the one the auth strategy resolved.
+ * (attached to `extra.actor` as a typed {@link McpAuthInfo}); it MUST throw when the token is
+ * missing/invalid/expired. The same `AuthInfo` is surfaced to the `tools/list` / `tools/call` handlers
+ * as `extra.authInfo`, so the actor the tool registry gates against is exactly the one the auth
+ * strategy resolved — consumers can read it with `authInfo.extra.actor` or `actorFromAuthInfo`.
  */
 export interface McpAuth {
   /** OAuth metadata to advertise, resolved lazily (the authkit peer may not be bootable until first use). */
   oauth?: McpOAuthMetadata | (() => McpOAuthMetadata | Promise<McpOAuthMetadata>);
-  /** Validate `token` and resolve the acting actor. Throws `Error` on rejection. */
-  verify(token: string): Promise<AuthInfo>;
+  /** Validate `token` and resolve the acting actor as a typed `McpAuthInfo`. Throws `Error` on rejection. */
+  verify(token: string): Promise<McpAuthInfo>;
 }
 
 /**
