@@ -1,0 +1,42 @@
+{{{
+  exports({ to: app.configPath('mcp.ts') })
+}}}
+import { defineMcpConfig, authKitAuth } from '@adonis-agora/agent/mcp'
+// import { apiKeyAuth } from '@adonis-agora/agent/mcp'
+
+/**
+ * Configuration for the MCP (Model Context Protocol) endpoint. The provider exposes the agent's tool
+ * registry over Streamable HTTP: `tools/list` mirrors the tools the acting actor may call and
+ * `tools/call` runs them through the same role-checked registry the agent loop uses.
+ *
+ * Requires `@adonis-agora/agent`'s agent provider (which owns the ToolRegistry singleton) to be
+ * registered. Register the MCP provider in adonisrc.ts:
+ *
+ *   providers: [
+ *     ...existing,
+ *     () => import('@adonis-agora/agent/mcp_provider'),
+ *   ]
+ *
+ * The endpoint mounts at `/mcp`. When `auth` exposes OAuth metadata (authKitAuth), MCP clients discover
+ * the login flow at `/.well-known/oauth-protected-resource/mcp`.
+ */
+export default defineMcpConfig({
+  name: 'Agent MCP Server',
+  version: '1.0.0',
+
+  // path: 'mcp',
+
+  // Authenticate MCP clients against @adonis-agora/authkit-server (OAuth OIDC): verifies the bearer
+  // token against the authkit provider and advertises OAuth metadata so clients can log in.
+  auth: authKitAuth(),
+
+  // Or static API keys for trusted gateway integrations (no OAuth metadata):
+  // auth: apiKeyAuth({ apiKeys: ['mcp_xxx'] }),
+
+  // Open/dev mode — run every request under a fixed identity. Fail-closed: omit this (and auth) and
+  // requests are rejected 401.
+  // actor: { id: 'mcp', roles: ['ADMIN'] },
+
+  // Restrict the exposed tools to an allow-list by name.
+  // allowedTools: ['calcular_estatisticas', 'estatistica_inferencial'],
+})
