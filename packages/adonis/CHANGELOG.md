@@ -1,5 +1,23 @@
 # @adonis-agora/agent
 
+## 0.19.0
+
+### Minor Changes
+
+- [`9a91190`](https://github.com/DavideCarvalho/adonis-agent/commit/9a91190936f24f912ccb756c58f490381f2b13c7) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Add an MCP (Model Context Protocol) endpoint that exposes the agent's ToolRegistry over Streamable
+  HTTP.
+
+  - New `./mcp` subpath: `defineMcpConfig`, `createMcpServer`, and two auth strategies — `authKitAuth()`
+    (OAuth OIDC via `@adonis-agora/authkit-server`, resolved lazily) and `apiKeyAuth()` (constant-time
+    key compare). The acting `Actor` resolves from the verified auth and gates `tools/list` /
+    `tools/call` through the same role-checked registry the agent loop uses (fail-closed).
+  - New `./mcp_provider` subpath: an Adonis provider that mounts `POST|GET|DELETE /mcp` plus
+    `GET /.well-known/oauth-protected-resource/mcp` (RFC 9728 metadata when OAuth is configured), with
+    per-session Streamable HTTP transports.
+  - `configure` publishes `config/mcp.ts` via the new `config/mcp.stub`.
+
+  The published `dist` ships `./mcp` and `./mcp_provider` export maps (mirroring `./agent_provider`).
+
 ## 0.18.0
 
 ### Minor Changes
