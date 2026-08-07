@@ -1,5 +1,11 @@
 # @adonis-agora/agent
 
+## 0.19.1
+
+### Patch Changes
+
+- [`3377419`](https://github.com/DavideCarvalho/adonis-agent/commit/3377419676511876522258d6156ccf79a7b302a0) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Type the MCP actor on `AuthInfo.extra`: the `authKitAuth()`/`apiKeyAuth()` strategies now return a typed `McpAuthInfo` (`extra: { actor: Actor }`), and `actorFromAuthInfo`/`isActor` are exported from `@adonis-agora/agent/mcp` so consumers no longer hand-roll a runtime guard. The MCP provider reuses the promoted helpers instead of its module-local copies.
+
 ## 0.19.0
 
 ### Minor Changes
