@@ -99,11 +99,7 @@
       "default": "./dist/src/react/index.js"
     }
   },
-  "files": [
-    "dist/",
-    "README.md",
-    "CHANGELOG.md"
-  ],
+  "files": ["dist/", "README.md", "CHANGELOG.md"],
   "sideEffects": false,
   "scripts": {
     "build": "pnpm run clean && tsc -p tsconfig.build.json && pnpm run copy:stubs && pnpm run check:dist",
